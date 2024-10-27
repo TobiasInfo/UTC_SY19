@@ -1,0 +1,745 @@
+```{r}
+data <- read.table("a24_reg_app.txt", header = TRUE, sep = " ")
+data
+```
+
+## Linear regression
+
+```{r}
+library(caret)
+library(ggplot2)
+library(lattice)
+set.seed(123)
+data <- read.table("a24_reg_app.txt", header = TRUE, sep = " ")
+
+cross_validate_linear_regression <- function(data, target) {
+    cv_errors <- numeric()
+    for (k in 3:20) {
+        train_control <- trainControl(method = "cv", number = k)
+        model <- train(as.formula(paste(target, "~ .")),
+                                     data = data,
+                                     method = "lm",
+                                     trControl = train_control)
+        cv_errors[k - 2] <- mean(model$resample$RMSE)
+    }
+    best_k <- which.min(cv_errors) + 2
+    final_train_control <- trainControl(method = "cv", number = best_k)
+    final_model <- train(as.formula(paste(target, "~ .")),
+                                             data = data,
+                                             method = "lm",
+                                             trControl = final_train_control)
+    
+    return(list(model = final_model, best_k = best_k))
+}
+result <- cross_validate_linear_regression(data, "y")
+print(result$best_k)
+print(result$model)
+```
+
+
+
+## KNN
+
+
+```{r}
+library(caret)
+library(ggplot2)
+library(lattice)
+set.seed(123)
+
+data <- read.table("a24_reg_app.txt", header = TRUE, sep = " ")
+
+cross_validate_knn_regression <- function(data, target) {
+    cv_errors <- numeric()
+    for (k in 3:20) {
+        train_control <- trainControl(method = "cv", number = k)
+        
+        model <- train(as.formula(paste(target, "~ .")),
+                       data = data,
+                       method = "knn",
+                       tuneGrid = data.frame(k = 3:25),  # Try neighbors from 1 to 20
+                       trControl = train_control)
+        cv_errors[k - 2] <- min(model$results$RMSE)
+    }
+    
+    best_k <- which.min(cv_errors) + 2
+    final_train_control <- trainControl(method = "cv", number = best_k)
+    final_model <- train(as.formula(paste(target, "~ .")),
+                         data = data,
+                         method = "knn",
+                         tuneGrid = data.frame(k = 3:25),  # Tune k' from 1 to 20
+                         trControl = final_train_control)
+    
+    best_k_prime <- final_model$bestTune$k
+    
+    final_r_squared <- max(final_model$results$Rsquared)
+    
+    return(list(model = final_model, best_k = best_k, best_k_prime = best_k_prime, R_squared = final_r_squared))
+}
+
+# Run the function and print results
+result <- cross_validate_knn_regression(data, "y")
+print(result$best_k)         # Best number of folds for CV
+print(result$best_k_prime)    # Best number of neighbors
+print(result)       # Final model R-squared
+```
+
+
+## Decision tree
+
+
+```{r}
+library(caret)
+library(rpart)      # For decision tree models
+library(ggplot2)
+library(lattice)
+set.seed(123)
+
+data <- read.table("a24_reg_app.txt", header = TRUE, sep = " ")
+
+cross_validate_decision_tree <- function(data, target) {
+    cv_errors <- numeric()
+    
+    for (k in 3:10) {
+        train_control <- trainControl(method = "cv", 
+                                      number = k)
+        
+        model <- train(as.formula(paste(target, "~ .")),
+                       data = data,
+                       method = "rpart",
+                       trControl = train_control)
+        
+        if (!any(is.na(model$resample$RMSE))) {
+            cv_errors[k - 2] <- mean(model$resample$RMSE)
+        } else {
+            cv_errors[k - 2] <- NA  # Skip storing if NA is found
+        }
+    }
+    
+    cv_errors <- na.omit(cv_errors)
+    best_k <- which.min(cv_errors) + 2
+    
+    final_train_control <- trainControl(method = "cv", 
+                                        number = best_k)
+    
+    final_model <- train(as.formula(paste(target, "~ .")),
+                         data = data,
+                         method = "rpart",
+                         trControl = final_train_control)
+    
+    final_r_squared <- max(final_model$results$Rsquared, na.rm = TRUE)  # Handle any NA values in R-squared
+    
+    return(list(model = final_model, best_k = best_k, R_squared = final_r_squared))
+}
+
+result <- cross_validate_decision_tree(data, "y")
+print(result$best_k)         # Best number of folds for CV
+print(result$R_squared)      # Final model R-squared
+print(result$model)          # Final model details
+
+```
+
+
+
+## Random forest
+
+
+```{r}
+library(caret)
+library(randomForest) # For random forest models
+library(ggplot2)
+library(lattice)
+set.seed(123)
+
+data <- read.table("a24_reg_app.txt", header = TRUE, sep = " ")
+
+cross_validate_random_forest <- function(data, target) {
+    cv_errors <- numeric()
+    
+    for (k in 3:10) {  # Limiting k to avoid small sample sizes per fold
+        train_control <- trainControl(method = "cv",
+                                      number = k) 
+        grid_rf <- expand.grid(mtry = c(1:3))  # Hyperparameter grid for mtry
+        model <- train(as.formula(paste(target, "~ .")),
+                       data = data,
+                       method = "rf",
+                       metric = "Rsquared",
+                       trControl = train_control,
+                       tuneGrid = grid_rf)
+        
+        if (!any(is.na(model$resample$RMSE))) {
+            cv_errors[k - 2] <- mean(model$resample$RMSE)
+        } else {
+            cv_errors[k - 2] <- NA  # Skip storing if NA is found
+        }
+    }
+    cv_errors <- na.omit(cv_errors)
+    best_k <- which.min(cv_errors) + 2
+    
+    final_train_control <- trainControl(method = "cv", 
+                                        number = best_k)
+    grid_rf <- expand.grid(mtry = c(1:3))
+    final_model <- train(as.formula(paste(target, "~ .")),
+                         data = data,
+                         method = "rf",
+                         trControl = final_train_control,
+                         tuneGrid = grid_rf) 
+    
+    final_r_squared <- max(final_model$results$Rsquared, na.rm = TRUE)  # Handle any NA values in R-squared
+    
+    return(list(model = final_model, best_k = best_k, R_squared = final_r_squared))
+}
+
+result <- cross_validate_random_forest(data, "y")
+print(result$best_k)         # Best number of folds for CV
+print(result$R_squared)      # Final model R-squared
+print(result$model)          # Final model details
+
+```
+
+## Ridge regression
+
+
+```{r}
+library(caret)
+library(glmnet)    
+library(ggplot2)
+library(lattice)
+set.seed(123)
+
+data <- read.table("a24_reg_app.txt", header = TRUE, sep = " ")
+
+cross_validate_ridge_regression <- function(data, target) {
+    cv_errors <- numeric()
+    
+    for (k in 3:10) { 
+        train_control <- trainControl(method = "cv", 
+                                      number = k)
+        
+        # Train the ridge regression model with the current number of folds
+        model <- train(as.formula(paste(target, "~ .")),
+                       data = data,
+                       method = "glmnet",
+                       trControl = train_control,
+                       tuneGrid = expand.grid(alpha = 0,    # Alpha = 0 for ridge regression
+                                              lambda = seq(0.001, 0.1, length = 10)))  # Lambda values to tune
+        
+        # Check for any NA values in the RMSE to avoid missing values in results
+        if (!any(is.na(model$resample$RMSE))) {
+            cv_errors[k - 2] <- mean(model$resample$RMSE)
+        } else {
+            cv_errors[k - 2] <- NA  # Skip storing if NA is found
+        }
+    }
+    
+    # Step 2: Filter out any NA values from cv_errors to avoid issues
+    cv_errors <- na.omit(cv_errors)
+    best_k <- which.min(cv_errors) + 2
+    
+    # Step 3: Train the final ridge regression model using the best number of folds
+    final_train_control <- trainControl(method = "cv", 
+                                        number = best_k)  # Handle missing values in folds
+    
+    final_model <- train(as.formula(paste(target, "~ .")),
+                         data = data,
+                         method = "glmnet",
+                         trControl = final_train_control,
+                         tuneGrid = expand.grid(alpha = 0,    # Alpha = 0 for ridge regression
+                                                lambda = seq(0.001, 0.1, length = 10)))  # Lambda values to tune
+    
+    # Step 4: Retrieve the R-squared value for the final model
+    final_r_squared <- max(final_model$results$Rsquared, na.rm = TRUE)  # Handle any NA values in R-squared
+    
+    return(list(model = final_model, best_k = best_k, R_squared = final_r_squared))
+}
+
+# Run the function and print results
+result <- cross_validate_ridge_regression(data, "y")
+print(result$best_k)         # Best number of folds for CV
+print(result$R_squared)      # Final model R-squared
+print(result$model)          # Final model details
+
+```
+
+## Lasso regression
+
+```{r}
+library(caret)
+library(glmnet)     # For lasso regression models
+set.seed(123)
+
+data <- read.table("a24_reg_app.txt", header = TRUE, sep = " ")
+
+cross_validate_lasso_regression <- function(data, target) {
+    cv_errors <- numeric()
+    
+    for (k in 3:10) {
+        train_control <- trainControl(method = "cv", number = k)
+        
+        model <- train(as.formula(paste(target, "~ .")),
+                       data = data,
+                       method = "glmnet",
+                       trControl = train_control,
+                       tuneGrid = expand.grid(alpha = 1,    # Alpha = 1 for lasso regression
+                                              lambda = seq(0.001, 0.1, length = 10)))
+        
+        if (!any(is.na(model$resample$RMSE))) {
+            cv_errors[k - 2] <- mean(model$resample$RMSE)
+        } else {
+            cv_errors[k - 2] <- NA  # Skip storing if NA is found
+        }
+    }
+    cv_errors <- na.omit(cv_errors)
+    best_k <- which.min(cv_errors) + 2
+    
+    final_train_control <- trainControl(method = "cv", number = best_k)
+    
+    final_model <- train(as.formula(paste(target, "~ .")),
+                         data = data,
+                         method = "glmnet",
+                         trControl = final_train_control,
+                         tuneGrid = expand.grid(alpha = 1,    # Alpha = 1 for lasso regression
+                                                lambda = seq(0.001, 0.1, length = 10)))
+    
+    best_lambda <- final_model$bestTune$lambda
+    coefficients <- coef(final_model$finalModel, s = best_lambda)
+    
+    deleted_predictors <- rownames(coefficients)[which(coefficients == 0)]
+    
+    final_r_squared <- max(final_model$results$Rsquared, na.rm = TRUE)
+    
+    return(list(model = final_model, best_k = best_k, R_squared = final_r_squared, deleted_predictors = deleted_predictors))
+}
+
+result <- cross_validate_lasso_regression(data, "y")
+print(result$best_k)                  # Best number of folds for CV
+print(result$R_squared)               # Final model R-squared
+print(result$deleted_predictors)      # Predictors removed by Lasso
+
+
+```
+
+
+
+
+## Elastic Net
+
+```{r}
+# Load necessary libraries
+library(glmnet)
+library(caret)
+
+# Set seed for reproducibility
+set.seed(123)
+
+data <- read.table("a24_reg_app.txt", header = TRUE, sep = " ")
+
+# Split the data into training and testing sets
+train_index <- sample(1:nrow(data), size = 0.8 * nrow(data), replace = FALSE)
+train_data <- data[train_index, ]
+test_data <- data[-train_index, ]
+
+# Prepare the model matrix for glmnet
+x_train <- model.matrix(y ~ ., data = train_data)[, -1]  # Remove intercept
+y_train <- train_data$y
+x_test <- model.matrix(y ~ ., data = test_data)[, -1]  # Remove intercept
+y_test <- test_data$y
+
+# Define the grid for alpha and lambda
+alpha_values <- seq(0, 1, by = 0.1)  # Alpha values from 0 (ridge) to 1 (lasso)
+lambda_values <- 10^seq(-3, 3, length = 100)  # Lambda values
+
+# Initialize variables to store results
+cv_errors <- numeric()
+best_k <- 0
+
+# Step 1: Find the best number of folds (k) by cross-validation
+for (k in 3:10) {
+    train_control <- trainControl(method = "cv", number = k)
+
+    # Train the model using Elastic Net with a grid search for alpha and lambda
+    elastic_net_model <- train(x_train, y_train,
+                                method = "glmnet",
+                                trControl = train_control,
+                                tuneGrid = expand.grid(alpha = alpha_values, lambda = lambda_values))
+
+    # Store the mean RMSE for the current k
+    cv_errors[k - 2] <- min(elastic_net_model$results$RMSE)
+}
+
+# Step 2: Filter out any NA values from cv_errors
+cv_errors <- na.omit(cv_errors)
+best_k <- which.min(cv_errors) + 2  # Adjust index for k values from 3 to 10
+
+# Print best k
+cat("Best Number of Folds (k):", best_k, "\n")
+
+# Step 3: Train the final Elastic Net regression model using the best number of folds
+final_train_control <- trainControl(method = "cv", number = best_k)
+
+# Train the final model
+final_elastic_net_model <- train(x_train, y_train,
+                                  method = "glmnet",
+                                  trControl = final_train_control,
+                                  tuneGrid = expand.grid(alpha = alpha_values, lambda = lambda_values))
+
+# Step 4: Make predictions on the test set using the best model
+final_predictions <- predict(final_elastic_net_model, newdata = as.data.frame(x_test))
+
+# Step 5: Calculate R-squared for the final model on the testing set
+final_r_squared <- cor(final_predictions, y_test)^2  # Calculate R-squared
+cat("R-squared on Test Set:", final_r_squared, "\n")
+
+
+```
+
+
+## GAM -> TODO A corriger
+
+```{r}
+# Load necessary libraries
+library(mgcv)
+library(caret)
+
+# Set seed for reproducibility
+set.seed(123)
+
+data <- read.table("a24_reg_app.txt", header = TRUE, sep = " ")
+
+# Split the data into training and testing sets
+train_index <- sample(1:nrow(data), size = 0.8 * nrow(data), replace = FALSE)
+x_train <- model.matrix(y ~ ., data = train_data)[, -1]  # Remove intercept
+y_train <- train_data$y
+x_test <- model.matrix(y ~ ., data = test_data)[, -1]  # Remove intercept
+y_test <- test_data$y
+
+# Prepare the formula for GAM
+formula_gam <- as.formula(paste("y ~", paste(names(data)[-1], collapse = " + ")))
+
+# Initialize variables to store results
+cv_errors <- numeric()
+best_k <- 0
+
+# Step 1: Find the best number of folds (k) by cross-validation
+for (k in 3:4) {
+    train_control <- trainControl(method = "cv", number = k)
+
+    # Train the GAM model
+    gam_model <- train(formula_gam,
+                       data = train_data,
+                       method = "gam",
+                       trControl = train_control)
+
+    # Store the mean RMSE for the current k
+    cv_errors[k - 2] <- mean(gam_model$resample$RMSE)
+}
+
+# Step 2: Filter out any NA values from cv_errors
+cv_errors <- na.omit(cv_errors)
+best_k <- which.min(cv_errors) + 2  # Adjust index for k values from 3 to 10
+
+# Print best k
+cat("Best Number of Folds (k):", best_k, "\n")
+
+# Step 3: Train the final GAM model using the best number of folds
+final_train_control <- trainControl(method = "cv", number = best_k)
+
+# Train the final model
+final_gam_model <- train(formula_gam,
+                         data = train_data,
+                         method = "gam",
+                         trControl = final_train_control)
+
+# Step 4: Make predictions on the test set using the best model
+final_predictions <- predict(final_gam_model, newdata = test_data)
+
+# Step 5: Calculate R-squared for the final model on the testing set
+final_r_squared <- cor(final_predictions, test_data$y)^2  # Calculate R-squared
+cat("R-squared on Test Set:", final_r_squared, "\n")
+
+```
+
+
+## Splines
+
+```{r}
+# Load necessary libraries
+library(caret)
+library(splines)
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Load the data
+data <- read.table("a24_reg_app.txt", header = TRUE, sep = " ")
+
+# Split the data into training and testing sets
+train_index <- sample(1:nrow(data), size = 0.8 * nrow(data), replace = FALSE)
+train_data <- data[train_index, ]
+test_data <- data[-train_index, ]
+
+# Prepare the model matrices for training and testing sets
+x_train <- model.matrix(y ~ ., data = train_data)[, -1]  # Remove intercept
+y_train <- train_data$y
+x_test <- model.matrix(y ~ ., data = test_data)[, -1]    # Remove intercept
+y_test <- test_data$y
+
+# Prepare the formula for Cubic Splines
+# We'll apply cubic splines to each predictor in the dataset
+spline_formula <- as.formula(paste("y ~", paste(paste0("bs(X.", 1:ncol(x_train), ", df = 5)", collapse = " + "))))
+
+# Initialize variables to store results
+cv_errors <- numeric()
+best_k <- 0
+
+# Step 1: Find the best number of folds (k) by cross-validation
+for (k in 3:4) {
+    train_control <- trainControl(method = "cv", number = k)
+
+    # Train the cubic splines model
+    spline_model <- train(spline_formula,
+                          data = train_data,
+                          method = "lm",  # Linear model with splines
+                          trControl = train_control)
+
+    # Store the mean RMSE for the current k
+    cv_errors[k - 2] <- mean(spline_model$resample$RMSE)
+}
+
+# Step 2: Filter out any NA values from cv_errors
+cv_errors <- na.omit(cv_errors)
+best_k <- which.min(cv_errors) + 2  # Adjust index for k values from 3 to 10
+
+# Print best k
+cat("Best Number of Folds (k):", best_k, "\n")
+
+# Step 3: Train the final cubic splines model using the best number of folds
+final_train_control <- trainControl(method = "cv", number = best_k)
+
+# Train the final model
+final_spline_model <- train(spline_formula,
+                            data = train_data,
+                            method = "lm",  # Linear model with splines
+                            trControl = final_train_control)
+
+# Step 4: Make predictions on the test set using the best model
+final_predictions <- predict(final_spline_model, newdata = test_data)
+
+# Step 5: Calculate R-squared for the final model on the testing set
+final_r_squared <- cor(final_predictions, test_data$y)^2  # Calculate R-squared
+cat("R-squared on Test Set:", final_r_squared, "\n")
+
+```
+
+
+
+
+
+
+
+
+```{r}
+library(caret)
+library(splines)  # For natural splines
+library(leaps)  # For forward selection
+set.seed(123)
+
+cross_validate_spline_regression <- function(data, target) {
+    predictors <- setdiff(names(data), target)
+
+    n <- nrow(data)
+    train_index <- sample(1:n, size = floor(0.8 * n), replace = FALSE)
+    train_data <- data[train_index, ]
+    test_data <- data[-train_index, ]
+
+    formula <- as.formula(paste(target, "~", paste(predictors, collapse = " + ")))
+    regfit <- regsubsets(formula, data = train_data, nvmax = length(predictors), really.big = TRUE)
+    summary_regfit <- summary(regfit)
+    best_subset <- which.min(summary_regfit$cp)
+    important_predictors <- names(coef(regfit, id = best_subset)[coef(regfit, id = best_subset) != 0, ])
+
+    spline_formula <- as.formula(paste(target, "~", paste("ns(", important_predictors, ", df = 5)", collapse = " + ")))
+
+    cv_errors <- numeric()
+
+    for (k in 3:10) {
+        train_control <- trainControl(method = "cv", number = k)
+
+        model <- train(spline_formula,
+                       data = train_data,
+                       method = "lm",
+                       trControl = train_control)
+
+        if (!any(is.na(model$resample$RMSE))) {
+            cv_errors[k - 2] <- mean(model$resample$RMSE)
+        } else {
+            cv_errors[k - 2] <- NA  # Skip storing if NA is found
+        }
+    }
+
+    cv_errors <- na.omit(cv_errors)
+    best_k <- which.min(cv_errors) + 2
+
+    final_train_control <- trainControl(method = "cv", number = best_k)
+
+    final_model <- train(spline_formula,
+                         data = train_data,
+                         method = "lm",
+                         trControl = final_train_control)
+
+    final_r_squared <- summary(predict(final_model, newdata = test_data))$r.squared
+
+    return(list(model = final_model, best_k = best_k, R_squared = final_r_squared))
+}
+
+result <- cross_validate_spline_regression(data, "y")
+print(result$best_k)                  # Best number of folds for CV
+print(result$R_squared)                # R-squared value for the final model on the testing set
+
+```
+
+
+
+
+
+
+
+
+```{r}
+library(caret)
+library(splines)  # For B-splines
+library(glmnet)  # For lasso regression
+set.seed(123)
+
+cross_validate_spline_regression <- function(data, target) {
+    data <- na.omit(data[, c(target, setdiff(names(data), target))])
+
+    predictors <- setdiff(names(data), target)
+    n <- nrow(data)
+    train_index <- sample(1:n, size = floor(0.8 * n), replace = FALSE)
+    train_data <- data[train_index, ]
+    test_data <- data[-train_index, ]
+
+    x <- model.matrix(as.formula(paste(target, "~", paste(predictors, collapse = " + "))), data = train_data)[, -1]
+    y <- train_data[[target]]  # Correctly refer to the target column
+    lambda <- cv.glmnet(x, y, alpha = 1, nlambda = 100)$lambda.min
+    lasso_fit <- glmnet(x, y, alpha = 1, lambda = lambda)
+
+    important_predictors <- names(coef(lasso_fit))[which(coef(lasso_fit) != 0)] 
+
+    if (length(important_predictors) == 0) {
+        stop("No important predictors selected by lasso.")
+    }
+
+    spline_terms <- sapply(important_predictors, function(predictor) {
+        paste0("bs(", predictor, ", df = 5, degree = 3, knots = quantile(train_data$", predictor, ", probs = seq(0, 1, length = 5)))")
+    })
+    
+    spline_formula <- as.formula(paste(target, "~", paste(spline_terms, collapse = " + ")))
+
+    cv_errors <- numeric()
+
+    for (k in 3:10) {
+        train_control <- trainControl(method = "cv", number = k)
+
+        model <- train(spline_formula,
+                       data = train_data,
+                       method = "lm",
+                       trControl = train_control)
+
+        if (!any(is.na(model$resample$RMSE))) {
+            cv_errors[k - 2] <- mean(model$resample$RMSE)
+        } else {
+            cv_errors[k - 2] <- NA  # Skip storing if NA is found
+        }
+    }
+
+    cv_errors <- na.omit(cv_errors)
+    best_k <- which.min(cv_errors) + 2
+
+    final_train_control <- trainControl(method = "cv", number = best_k)
+
+    final_model <- train(spline_formula,
+                         data = train_data,
+                         method = "lm",
+                         trControl = final_train_control)
+
+    test_predictions <- predict(final_model, newdata = test_data)
+    final_r_squared <- cor(test_data[[target]], test_predictions)^2  # Calculate R-squared manually
+
+    return(list(model = final_model, best_k = best_k, R_squared = final_r_squared))
+}
+
+result <- cross_validate_spline_regression(data, "y")
+print(result$best_k)    
+print(result$R_squared) 
+
+
+```
+
+
+
+
+
+```{r}
+library(caret)
+library(splines)  # For B-splines
+library(glmnet)  # For lasso regression
+set.seed(123)
+data <- read.table("a24_reg_app.txt", header = TRUE, sep = " ")
+
+cross_validate_spline_regression <- function(data, target) {
+    predictors <- setdiff(names(data), target)
+
+    n <- nrow(data)
+    train_index <- sample(1:n, size = floor(0.8 * n), replace = FALSE)
+    train_data <- data[train_index, ]
+    test_data <- data[-train_index, ]
+
+    x <- model.matrix(as.formula(paste(target, "~", paste(predictors, collapse = " + "))), data = train_data)[, -1]
+    y <- train_data$target
+    lambda <- cv.glmnet(x, y, alpha = 1, nlambda = 100)$lambda.min
+    lasso_fit <- glmnet(x, y, alpha = 1, lambda = lambda)
+    important_predictors <- names(coef(lasso_fit)[coef(lasso_fit) != 0, ])
+
+    spline_formula <- as.formula(paste(target, "~", paste("bs(", important_predictors, ", df = 5, degree = 3, knots = quantile(", important_predictors, ", probs = seq(0, 1, length = 5)))", collapse = " + ")))
+
+    cv_errors <- numeric()
+
+    for (k in 3:10) {
+        train_control <- trainControl(method = "cv", number = k)
+
+        model <- train(spline_formula,
+                       data = train_data,
+                       method = "lm",
+                       trControl = train_control)
+
+        if (!any(is.na(model$resample$RMSE))) {
+            cv_errors[k - 2] <- mean(model$resample$RMSE)
+        } else {
+            cv_errors[k - 2] <- NA  # Skip storing if NA is found
+        }
+    }
+
+    cv_errors <- na.omit(cv_errors)
+    best_k <- which.min(cv_errors) + 2
+
+    final_train_control <- trainControl(method = "cv", number = best_k)
+
+    final_model <- train(spline_formula,
+                         data = train_data,
+                         method = "lm",
+                         trControl = final_train_control)
+
+    final_r_squared <- summary(predict(final_model, newdata = test_data))$r.squared
+
+    return(list(model = final_model, best_k = best_k, R_squared = final_r_squared))
+}
+
+result <- cross_validate_spline_regression(data, "y")
+print(result$best_k)                  # Best number of folds for CV
+print(result$R_squared)                # R-squared value for the final model on the testing set
+```
+
+
+
