@@ -1,0 +1,142 @@
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(caret)
+library(ggpubr)
+
+?dplyr::filter
+?stats::filter
+```
+
+
+```{r}
+# Load the dataset
+df <- read.csv("data/medical_insurance.csv", sep = ",")
+df <- df %>% distinct()  # Remove duplicates
+```
+
+```{r}
+# Initial overview of the data
+head(df)
+print("Overview :")
+str(df)
+print("Dim :")
+dim(df)
+print("Summary :")
+summary(df)
+```
+
+```{r}
+# Count unique values for specified columns
+for (col in c("children", "smoker", "region", "sex")) {
+  cat("\n", col, "\n")
+  print(table(df[[col]]))
+}
+
+# Label encoding for smoker and sex columns
+df$smoker <- as.numeric(factor(df$smoker)) - 1  # Convert to binary
+df$sex <- as.numeric(factor(df$sex)) - 1        # Convert to binary
+
+# One-hot encoding for the region column
+df <- cbind(df, model.matrix(~region - 1, data = df))
+df$region <- NULL  # Drop the original region column
+
+# BMI Analysis
+nb <- nrow(df %>% filter(bmi < 24.9))
+total <- nrow(df)
+
+q1 <- quantile(df$bmi, 0.25)
+q2 <- quantile(df$bmi, 0.5)
+q3 <- quantile(df$bmi, 0.75)
+
+df$bmi_cat <- cut(df$bmi, breaks = c(-Inf, q1, q2, q3, Inf), labels = c(1, 2, 3, 4))
+
+cat("Percentage of people with BMI less than 24.9: ", (nb / total) * 100, "\n")
+print(nb)
+```
+
+```{r}
+# KDE plot for charges by BMI category
+ggplot(df, aes(x = charges, fill = factor(bmi_cat))) +
+  geom_density(alpha = 0.5) +
+  scale_fill_brewer(palette = "Spectral") +
+  labs(title = "KDE of Charges by BMI Category", x = "Charges", fill = "BMI Category")
+```
+
+```{r}
+# Calculate correlation between BMI category and charges
+encoded_bmi <- model.matrix(~ bmi_cat - 1, data = df) %>% as.data.frame()
+encoded_bmi$charges <- df$charges
+
+# Compute the correlation matrix
+correlation_matrix <- cor(encoded_bmi)
+
+# Extract the correlations of "charges" with other variables and sort them
+correlation <- correlation_matrix["charges", ] %>% sort(decreasing = TRUE)
+print(correlation)
+```
+
+```{r}
+# Boxplot for smoker status vs. charges
+ggplot(df, aes(x = factor(smoker), y = charges, fill = factor(smoker))) +
+  geom_boxplot() +
+  scale_fill_brewer(palette = "Spectral") +
+  labs(title = "Boxplot of Charges by Smoker Status", x = "Smoker", y = "Charges")
+```
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+# Scatter plot of charges vs bmi, colored by smoker
+ggplot(df, aes(x = bmi, y = charges, color = factor(smoker))) +
+  geom_point() +
+  theme_minimal()
+
+```
+
+```{r}
+# Age analysis
+ggplot(df, aes(y = age)) +
+  geom_boxplot(fill = "blue", color = "black") +
+  labs(title = "Boxplot for Age", y = "Age")
+```
+```{r}
+# Histogram of charges by age range
+ggplot(df, aes(x = age, weight = charges)) +
+  geom_histogram(breaks = seq(15, 70, by = 5), fill = "blue", color = "black") +
+  labs(title = "Histogram of Charges by Age Range", x = "Age", y = "Charges")
+```
+
+```{r}
+# Children count
+table(df$children)
+
+```
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(reshape2) # For melt function
+
+# Calculate the correlation matrix for numeric columns
+corr_matrix <- cor(df %>% select_if(is.numeric))
+
+# Reshape the correlation matrix to long format for ggplot
+corr_melt <- melt(corr_matrix)
+
+# Plot the heatmap
+ggplot(corr_melt, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0) +
+  labs(title = "Correlation Matrix Heatmap", x = "", y = "") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title = element_blank()
+  ) +
+  coord_fixed()
+
+```
