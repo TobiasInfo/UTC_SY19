@@ -270,58 +270,52 @@ library(kknn)
 library(e1071)
 set.seed(123)
 
+df_without_charges <- df
+
 # Vérifiez si 'charges' existe dans le dataframe et filtrez les valeurs NA dans 'charges'
-if("charges" %in% names(df)) {
-  df <- df %>% filter(!is.na(charges))
+if("charges" %in% names(df_without_charges)) {
+  df_without_charges <- df_without_charges %>% filter(!is.na(charges))
 } else {
   stop("La colonne 'charges' n'existe pas dans le dataframe.")
 }
 
-# Count each group by charge range
-cat("Number of people with charges < 10000:", nrow(df %>% filter(charges < 10000)), "\n")
-cat("Number of people with charges between 10000 and 30000:", nrow(df %>% filter(charges >= 10000 & charges <= 30000)), "\n")
-cat("Number of people with charges > 30000:", nrow(df %>% filter(charges > 30000)), "\n")
-
 # Add charge groups and drop "charges" column
-df <- df %>% mutate(charges_group = cut(charges, breaks = c(0, 10000, 30000, Inf), labels = c(0, 1, 2)))
-df <- df %>% select(-charges)
+df_without_charges <- df_without_charges %>% mutate(charges_group = cut(charges, breaks = c(0, 10000, 30000, Inf), labels = c(0, 1, 2)))
+df_without_charges <- df_without_charges %>% select(-charges)
 
 # Convert charges_group to factor for classification
-df$charges_group <- as.factor(df$charges_group)
+df_without_charges$charges_group <- as.factor(df_without_charges$charges_group)
 
-# Train/test split
-index <- createDataPartition(df$charges_group, p = 0.7, list = FALSE)
-train <- df[index, ]
-test <- df[-index, ]
+# Define train control with 5-fold cross-validation
+ctrl <- trainControl(method = "cv", number = 5)
 
-# Classification models
-models <- list(
-  DecisionTree = rpart::rpart(charges_group ~ ., data = train),
-  KNeighbors = kknn::train.kknn(charges_group ~ ., data = train, k = 5), 
-  NaiveBayes = e1071::naiveBayes(charges_group ~ ., data = train),
-  RandomForest = randomForest(charges_group ~ ., data = train)
-)
+# Train each model with cross-validation
+models_cv <- list()
 
-# Model Evaluation
-results <- sapply(models, function(model) {
-  # Prédiction
-  pred <- if (inherits(model, "train.kknn")) {
-    predict(model, test)  # kknn retourne directement les prédictions sans 'type = "class"'
-  } else {
-    predict(model, test, type = "class")  # Pour les autres modèles, spécifiez le type de prédiction
-  }
-  
-  # Calcul de l'exactitude
-  accuracy <- mean(pred == test$charges_group)
-  return(accuracy)
+# Decision Tree
+models_cv$DecisionTree <- train(charges_group ~ ., data = df_without_charges, method = "rpart", trControl = ctrl)
+
+# K-Nearest Neighbors
+#models_cv$KNeighbors <- train(charges_group ~ ., data = df_without_charges, method = "kknn", trControl = ctrl, tuneGrid = expand.grid(k = 5))
+
+# Naive Bayes
+models_cv$NaiveBayes <- train(charges_group ~ ., data = df_without_charges, method = "nb", trControl = ctrl)
+
+# Random Forest
+models_cv$RandomForest <- train(charges_group ~ ., data = df_without_charges, method = "rf", trControl = ctrl)
+
+# Extract accuracies from cross-validation results
+results_cv <- sapply(models_cv, function(model) {
+  max(model$results$Accuracy)  # Getting the maximum accuracy achieved during CV for each model
 })
 
 # Convert results to DataFrame for easier viewing
-results <- data.frame(
-  Model = names(results),
-  Accuracy = as.numeric(results)
+results_cv <- data.frame(
+  Model = names(results_cv),
+  Accuracy = as.numeric(results_cv)
 )
-print(results)
+
+print(results_cv)
 
 ```
 
