@@ -1,0 +1,371 @@
+
+
+## Import libraries
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(caret)
+library(ggpubr)
+
+?dplyr::filter
+?stats::filter
+```
+
+## Read the data
+```{r}
+df <- read.csv("data/medical_insurance.csv", sep = ",")
+df <- df %>% distinct()
+```
+
+
+## Visualisation de la donnée
+```{r}
+# Initial overview of the data
+head(df)
+print("Overview :")
+str(df)
+print("Dim :")
+dim(df)
+print("Summary :")
+summary(df)
+```
+
+## Indicateurs de base
+```{r}
+# Count unique values for specified columns
+for (col in c("children", "smoker", "region", "sex")) {
+  cat("\n", col, "\n")
+  print(table(df[[col]]))
+}
+
+# Label encoding for smoker and sex columns
+df$smoker <- as.numeric(factor(df$smoker)) - 1  # Convert to binary
+df$sex <- as.numeric(factor(df$sex)) - 1        # Convert to binary
+
+# One-hot encoding for the region column
+df <- cbind(df, model.matrix(~region - 1, data = df))
+df$region <- NULL  # Drop the original region column
+
+# BMI Analysis
+nb <- nrow(df %>% filter(bmi < 24.9))
+total <- nrow(df)
+
+q1 <- quantile(df$bmi, 0.25)
+q2 <- quantile(df$bmi, 0.5)
+q3 <- quantile(df$bmi, 0.75)
+
+df$bmi_cat <- cut(df$bmi, breaks = c(-Inf, q1, q2, q3, Inf), labels = c(1, 2, 3, 4))
+
+cat("Percentage of people with BMI less than 24.9: ", (nb / total) * 100, "\n")
+print(nb)
+```
+
+```{r}
+# KDE plot for charges by BMI category
+ggplot(df, aes(x = charges, fill = factor(bmi_cat))) +
+  geom_density(alpha = 0.5) +
+  scale_fill_brewer(palette = "Spectral") +
+  labs(title = "KDE of Charges by BMI Category", x = "Charges", fill = "BMI Category")
+```
+On observe que les individus dans les catégories d'IMC élevées (catégories 3 et 4) ont tendance à avoir des charges médicales plus élevées, tandis que ceux des catégories plus basses (catégorie 1) ont des dépenses plus faibles.
+
+
+```{r}
+# Calculate correlation between BMI category and charges
+encoded_bmi <- model.matrix(~ bmi_cat - 1, data = df) %>% as.data.frame()
+encoded_bmi$charges <- df$charges
+
+# Compute the correlation matrix
+correlation_matrix <- cor(encoded_bmi)
+
+# Extract the correlations of "charges" with other variables and sort them
+correlation <- correlation_matrix["charges", ] %>% sort(decreasing = TRUE)
+print(correlation)
+```
+L'analyse de corrélation confirme cette tendance, suggérant une relation positive entre l'IMC et les dépenses médicales.
+
+
+```{r}
+# Boxplot for smoker status vs. charges
+ggplot(df, aes(x = factor(smoker), y = charges, fill = factor(smoker))) +
+  geom_boxplot() +
+  scale_fill_brewer(palette = "Spectral") +
+  labs(title = "Boxplot of Charges by Smoker Status", x = "Smoker", y = "Charges")
+```
+On remarque ici que les non fumeurs payent en des charges beaucoup moins importantes que les non fumeurs.
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+# Scatter plot of charges vs bmi, colored by smoker
+ggplot(df, aes(x = bmi, y = charges, color = factor(smoker))) +
+  geom_point() +
+  theme_minimal()
+
+```
+Ce graphique confirme ce que nous avons vu précédement. Les charges augmentent de facon linéaire 
+pour les personnes fumeurs alors qu'elles restent assez stables pour les personnes non fumeuses
+
+
+```{r}
+# Age analysis
+ggplot(df, aes(y = age)) +
+  geom_boxplot(fill = "blue", color = "black") +
+  labs(title = "Boxplot for Age", y = "Age")
+```
+On remarque que notre dataset représente exclusivement des personnes actives (entre 18 et 60 ans)
+
+
+```{r}
+# Histogram of charges by age range
+ggplot(df, aes(x = age, weight = charges)) +
+  geom_histogram(breaks = seq(15, 70, by = 5), fill = "blue", color = "black") +
+  labs(title = "Histogram of Charges by Age Range", x = "Age", y = "Charges")
+```
+On remarque que le cout de l'assurance maladie augmente petit à petit en fonction de l'âge.
+
+
+
+```{r}
+# Children count
+table(df$children)
+
+```
+Le dataset se focalise principalement sur des personnes ayant entre 0 et 3 enfants
+
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(reshape2) # For melt function
+
+# Calculate the correlation matrix for numeric columns
+corr_matrix <- cor(df %>% select_if(is.numeric))
+
+# Reshape the correlation matrix to long format for ggplot
+corr_melt <- melt(corr_matrix)
+
+# Plot the heatmap
+ggplot(corr_melt, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0) +
+  labs(title = "Correlation Matrix Heatmap", x = "", y = "") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title = element_blank()
+  ) +
+  coord_fixed()
+
+```
+On remrque comme nous l'avions vu précédement que les predicteurs ne font pas très fortement corrélés appart 
+la variable fumeur qui a une importance capitale
+
+## Preprocessing des données
+
+On cherche à améliorer les données grâce aux informations que nous avons pu remarqué précédement.
+
+1) Encodage das variables smoker et sex
+2) One hot encoding pour la variable région
+3) scaling de l'age, children et BMI
+
+Ces modifications sont enregistrés dans le fichier data/medical_insurance_scaled.csv
+```{r}
+library(dplyr)
+library(readr)
+library(caret)
+library(Matrix)
+library(ggplot2)
+library(data.table)
+library(scales)
+
+# Load the data
+df <- read.csv("data/medical_insurance.csv", sep = ",")
+
+# Remove duplicates
+df <- distinct(df)
+
+# Encode the "smoker" and "sex" columns as binary variables
+df$smoker <- as.numeric(as.factor(df$smoker)) - 1
+df$sex <- as.numeric(as.factor(df$sex)) - 1
+
+# One-hot encode the "region" column
+encoded_region <- model.matrix(~ region - 1, data = df)
+colnames(encoded_region) <- c("northeast", "northwest", "southeast", "southwest")
+df <- cbind(df, encoded_region)
+
+# Drop the original "region" column
+df <- df %>% select(-region)
+
+# Standardize the "age", "children", and "bmi" columns
+scaler <- preProcess(df[, c("age", "children", "bmi")], method = c("center", "scale"))
+df_quant <- predict(scaler, df[, c("age", "children", "bmi")])
+
+# Combine the scaled quantitative data with non-quantitative columns
+df_non_quant <- df %>% select(-c(age, children, bmi))
+scaled_data <- cbind(df_quant, df_non_quant)
+
+# Preview the result
+head(scaled_data)
+
+# Save the scaled data to a new CSV file
+write.csv(scaled_data, "data/medical_insurance_scaled.csv", row.names = FALSE)
+```
+
+## Visualisation de la répartition des charges 
+
+```{r}
+# Libraries
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(Matrix)
+library(cluster)
+library(kernlab)
+
+# Load Data
+df <- read.csv("data/medical_insurance.csv", sep = ",")
+df <- distinct(df)
+
+# Encode "smoker" and "sex" columns as binary variables
+df$smoker <- as.numeric(as.factor(df$smoker)) - 1
+df$sex <- as.numeric(as.factor(df$sex)) - 1
+
+# One-hot encode the "region" column
+encoded_region <- model.matrix(~ region - 1, data = df)
+colnames(encoded_region) <- c("northeast", "northwest", "southeast", "southwest")
+df <- cbind(df, encoded_region)
+
+# Drop the original "region" column
+df <- df %>% select(-region)
+
+# Plot: Segmentation into charge zones
+ggplot(df) + 
+  geom_histogram(aes(x = charges), bins = 30, fill = "blue", data = df %>% filter(charges < 10000)) +
+  geom_histogram(aes(x = charges), bins = 30, fill = "green", data = df %>% filter(charges >= 10000 & charges <= 30000)) +
+  geom_histogram(aes(x = charges), bins = 30, fill = "red", data = df %>% filter(charges > 30000)) +
+  labs(title = "Histogram of Charges", x = "Charges", y = "Number of People")
+```
+Zone bleue (Charges < 10 000) : La majorité des individus ont des dépenses médicales inférieures à 10 000. Cela montre une grande concentration de personnes avec des coûts de santé relativement bas.
+
+Zone verte (10 000 ≤ Charges ≤ 30 000) : Un nombre modéré d'individus ont des dépenses dans cette plage, suggérant des coûts de santé intermédiaires.
+
+Zone rouge (Charges > 30 000) : Peu de personnes ont des dépenses médicales supérieures à 30 000, représentant les cas de coûts de santé élevés.
+
+La majorité des dépenses sont concentrées dans la zone de coûts faibles, tandis que les dépenses élevées sont rares mais significatives en termes de montant.
+
+
+
+## Reprendre ici
+
+```{r}
+# Load libraries
+library(dplyr)
+library(caret)
+library(rpart)
+library(randomForest)
+library(kknn)
+library(e1071)
+set.seed(123)
+
+df_without_charges <- df
+
+# Vérifiez si 'charges' existe dans le dataframe et filtrez les valeurs NA dans 'charges'
+if("charges" %in% names(df_without_charges)) {
+  df_without_charges <- df_without_charges %>% filter(!is.na(charges))
+} else {
+  stop("La colonne 'charges' n'existe pas dans le dataframe.")
+}
+
+# Add charge groups and drop "charges" column
+df_without_charges <- df_without_charges %>% mutate(charges_group = cut(charges, breaks = c(0, 10000, 30000, Inf), labels = c(0, 1, 2)))
+df_without_charges <- df_without_charges %>% select(-charges)
+
+# Convert charges_group to factor for classification
+df_without_charges$charges_group <- as.factor(df_without_charges$charges_group)
+
+# Define train control with 5-fold cross-validation
+ctrl <- trainControl(method = "cv", number = 5)
+
+# Train each model with cross-validation
+models_cv <- list()
+
+# Decision Tree
+models_cv$DecisionTree <- train(charges_group ~ ., data = df_without_charges, method = "rpart", trControl = ctrl)
+
+# K-Nearest Neighbors
+#models_cv$KNeighbors <- train(charges_group ~ ., data = df_without_charges, method = "kknn", trControl = ctrl, tuneGrid = expand.grid(k = 5))
+
+# Naive Bayes
+models_cv$NaiveBayes <- train(charges_group ~ ., data = df_without_charges, method = "nb", trControl = ctrl)
+
+# Random Forest
+models_cv$RandomForest <- train(charges_group ~ ., data = df_without_charges, method = "rf", trControl = ctrl)
+
+# Extract accuracies from cross-validation results
+results_cv <- sapply(models_cv, function(model) {
+  max(model$results$Accuracy)  # Getting the maximum accuracy achieved during CV for each model
+})
+
+# Convert results to DataFrame for easier viewing
+results_cv <- data.frame(
+  Model = names(results_cv),
+  Accuracy = as.numeric(results_cv)
+)
+
+print(results_cv)
+
+```
+
+
+```{r}
+# Adjusted hyperparameter tuning grid for caret with RandomForest
+rf_grid <- expand.grid(
+  mtry = c(2, 4, 6, 8)  # mtry is the number of variables available for splitting at each tree node
+)
+
+# Define train control with cross-validation
+ctrl <- trainControl(method = "cv", number = 3)
+
+# Train RandomForest model with tuning grid
+rf_model <- train(charges_group ~ ., data = train, method = "rf", trControl = ctrl, tuneGrid = rf_grid)
+
+# Output best parameters found
+print(rf_model$bestTune)
+
+```
+
+
+```{r}
+# K-means clustering on the data
+df_no_charges <- df %>% select(-charges_group)
+set.seed(123)
+wss <- sapply(1:10, function(k) {kmeans(df_no_charges, k, nstart = 10)$tot.withinss})
+
+# Elbow plot for optimal clusters
+plot(1:10, wss, type = "b", pch = 19, frame = FALSE, 
+     xlab = "Number of Clusters", ylab = "Total Within Sum of Squares")
+```
+
+
+```{r}
+# Applying k-means with optimal clusters
+optimal_k <- 3
+kmeans_model <- kmeans(df_no_charges, centers = optimal_k, nstart = 25)
+df$cluster <- as.factor(kmeans_model$cluster)
+
+# Create a plotting copy with 'charges' added
+df_plot <- cbind(df_no_charges, charges = df$charges, cluster = as.factor(kmeans_model$cluster))
+
+# Plot clusters with age and charges
+ggplot(df_plot, aes(x = age, y = charges, color = cluster)) + 
+  geom_point() + 
+  labs(title = "Clusters based on Age and Charges", x = "Age", y = "Charges")
+
+```
+
+
+
+
