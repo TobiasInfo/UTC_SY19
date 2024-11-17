@@ -1,6 +1,47 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
 
 
-## Import libraries
+# Jeu de données réel
+
+
+
+## Introduction
+
+  Ce rapport porte sur un jeu de données concernant les assurances
+  médicales aux États-Unis. Nous présenterons d'abord le jeu de données.
+  Ensuite, nous appliquerons des outils de machine learning.  
+
+L'accès aux soins de santé et la couverture médicale sont des enjeux majeurs aux
+États-Unis. Les compagnies d'assurance adaptent leurs offres en fonction des 
+profils clients. L'analyse des données des assurés permet d'identifier les 
+facteurs influençant les coûts médicaux.  
+
+Dans le cadre de notre projet, nous avons étudié un jeu de données
+disponible sur la plateforme Kaggle. Ce jeu de
+données comprend diverses informations sur les assurés.  
+
+Notre objectif principal est d'identifier les facteurs clé influençant
+les coûts d'assurance maladie et d'évaluer la performance des modèles de
+machine learning dans la prédiction de ces coûts. Pour atteindre cet
+objectif, nous avons répondu aux questions suivantes :  
+
+- Quelle est l'influence des variables sur les coûts médicaux ?  
+- Existe-t-il des différences régionales significatives ?  
+- Quel est l'impact du nombre d'enfants à charge ?  
+- Comment les résultats obtenus à partir de ce jeu de données
+peuvent-ils aider les compagnies d'assurance médicale ?  
+
+Dans ce rapport, nous présentons les résultats de notre étude en suivant
+la structure suivante :  
+1. Exploration des données (EDA)  
+2. Pré-traitement des données  
+3. Application de modèles de machine learning  
+4. Conclusion et perspectives  
+
 ```{r}
 # Load necessary libraries
 library(dplyr)
@@ -8,12 +49,17 @@ library(ggplot2)
 library(reshape2)
 library(caret)
 library(ggpubr)
+library(lattice)
+library(magrittr)
+library(Amelia) 
+library(corrplot)
+library(cowplot)
+library(gridExtra)
 
 ?dplyr::filter
 ?stats::filter
 ```
 
-## Read the data
 ```{r}
 df <- read.csv("data/medical_insurance.csv", sep = ",")
 df <- df %>% distinct()
@@ -26,15 +72,20 @@ df <- df %>% distinct()
 head(df)
 print("Overview :")
 str(df)
-print("Dim :")
-dim(df)
 print("Summary :")
 summary(df)
 ```
 
-## Indicateurs de base
+
+
+## Analyse exploratoire des données : EDA  
+
+Cette section vise à mieux comprendre notre jeu de données. Pour cela,
+nous entreprenons une exploration approfondie des données pour mieux
+comprendre la structure et les caractéristiques via des graphiques et
+des calculs statistiques.  
 ```{r}
-# Count unique values for specified columns
+df$smoker_original <- df$smoker
 for (col in c("children", "smoker", "region", "sex")) {
   cat("\n", col, "\n")
   print(table(df[[col]]))
@@ -60,94 +111,147 @@ df$bmi_cat <- cut(df$bmi, breaks = c(-Inf, q1, q2, q3, Inf), labels = c(1, 2, 3,
 
 cat("Percentage of people with BMI less than 24.9: ", (nb / total) * 100, "\n")
 print(nb)
+
 ```
+### Présentation des variables :  
+
+- **Age** : l'âge de l'assuré, exprimé en années.  
+
+- **Sexe** : le genre de l'assuré, correspondant soit à \"male\" soit
+    à \"female\".  
+
+- **IMC (Indice de Masse Corporelle)** : une mesure du poids corporel
+    par rapport à la taille, calculée selon la formule suivante :
+    $IMC = \frac{poids}{taille^2}$  
+
+- **Enfants** : le nombre d'enfants à charge de l'assuré, entre 0 et 5.  
+
+- **Fumeur** : un indicateur binaire indiquant si l'assuré est fumeur
+    ou non.  
+
+- **Région** : la région de résidence de l'assuré, classée par NW, SW,
+    SE, NE (les points cardinaux de la rose des vents).  
+
+- **Charges** : les charges médicales associées à chaque assuré,
+    exprimées dollars.  
+
+En effectuant une exploration approfondie de ces variables, notre
+objectif est d'identifier des tendances, des corrélations et des
+distributions de données susceptibles d'influencer les charges médicales
+des assurés. Cette analyse exhaustive nous permettra de mieux comprendre
+les facteurs sous-jacents et de poser les bases nécessaires à la
+modélisation dans les sections ultérieures de notre étude.  
+
+### Analyse univariée
+
+Au sein de cette partie, nous allons effectuer une analyse univariée qui
+permet de mettre en lumière les caractéristiques individuelles de chaque
+variable du jeu de données, telles que leur distribution, leur tendance
+centrale et leur dispersion. Cette analyse nous aidera à mieux
+comprendre les données et à identifier les éventuelles anomalies ou
+valeurs aberrantes.  
+
+::: center
+::: {#tab:description:variables}
+   Indicateur    Age     IMC    Enfants   Assurance
+  ------------ ------- ------- --------- -----------
+    Moyenne     39.22   30.66    1.10     13279.12
+    Médiane     39.00   30.40    1.00      9386.16
+   Ecart-Type   14.04   6.10     1.20     12110.36
+    Minimum     18.00   15.96    0.00      1121.87
+    Maximum     64.00   53.13    5.00     63770.43
+
+  : Description de certaines variables
+:::
+:::
 
 ```{r}
-# KDE plot for charges by BMI category
-ggplot(df, aes(x = charges, fill = factor(bmi_cat))) +
-  geom_density(alpha = 0.5) +
-  scale_fill_brewer(palette = "Spectral") +
-  labs(title = "KDE of Charges by BMI Category", x = "Charges", fill = "BMI Category")
+d1<-ggplot(data = df,aes(x=charges)) + geom_histogram(color="black", fill="mediumorchid1", bins=10)+
+labs(title="Charges distribution")
+
+d2<-ggplot(data = df,aes(x=bmi)) + geom_histogram(color="black", fill="mediumorchid1", bins=10)+
+labs(title="BMI histogram")
+
+d3<-ggplot(data = df,aes(x=age)) + geom_histogram(color="black", fill="mediumorchid1", bins=10)+
+labs(title="Age Distribution")
+
+d4<-ggplot(data = df,aes(x=smoker)) + geom_bar(color="black", fill="mediumorchid1", bins=10)+
+labs(title="Smoker Distribution") 
+
+plot_grid(d1, d2, d3, d4, rel_widths = c(1.15, 1),ncol = 2, align = "hv")
 ```
-On observe que les individus dans les catégories d'IMC élevées (catégories 3 et 4) ont tendance à avoir des charges médicales plus élevées, tandis que ceux des catégories plus basses (catégorie 1) ont des dépenses plus faibles.
+
+#### Variables quantitatives
+
+La moyenne et la médiane d'âge sont très proches laissant supposer que
+le jeu de données se focalise sur des personnes dans une tranche d'âge
+active. La médiane peut laisser penser que la distribution est assez
+symétrique. L'écart-type démontre une dispersion modérée des données
+autour de la moyenne.  
+
+On remarque aussi que l'âge minimum est de 18 ans et l'âge maximum est
+de 64 ans confirmant que le jeu de données se concentre sur les
+personnes actives.  
+
+Selon l'OMS (Organisation Mondiale de la Santé), l'IMC peut
+être divisé en 4 catégories majeures. Un risque faible pour les
+personnes ayant un IMC \< 18.5, moyen pour un IMC entre 18.5 et 24.9,
+importants pour un IMC entre 25 et 29.9 et très importants pour un IMC
+supérieur à 30. Ces risques correspondent respectivement aux catégories
+: sous la normale, normale, surpoids, obèse.  
+
+On remarque que la moyenne d'IMC au sein du jeu de données est
+considérée comme étant dans la catégorie \"obèse\" selon les normes de
+l'OMS. La médiane et l'écart-type indiquent une variabilité modérée dans
+les données d'IMC.  
+
+On remarque que 18% des personnes représentés dans le jeu de données
+présentent un IMC inférieur à 24.9. On note donc que le jeu de données
+comporte beaucoup de personnes avec un IMC considéré comme \"Surpoids\"
+ou \"Obèse\" selon l'OMS.  
+
+Enfin, le minimum et le maximum indiquent que notre dataset couvre une
+large gamme de catégories d'IMC.  
+
+Le nombre d'enfants dans le jeu de données varie de 0 à 5. La moyenne de
+1.10 et la médiane de 1.00 nous permettent de déduire que la plupart des
+personnes ont un enfant ou moins. Une analyse en composantes principales
+a été réalisée sur ces trois variables, mais les résultats ne permettent
+pas de réduire la dimensionnalité de notre jeu de données.  
+
+Enfin, le prix moyen de l'assurance maladie (représenté par la variable charge 
+est de 13279.12\$. Nous avons pour le premier quartile 4,746.34\$, la médiane 
+9,386.16\$ et le 3e quartile 16,657.72\$, indiquant que nos données sont 
+massivement réparties autour de 10000\$, avec une asymétrie vers les valeurs 
+élevées. L'écart-type élevé indique une variabilité significative dans les coûts 
+parmi les assurés.  
+
+#### Variables qualitatives
+
+Sur les 1337 individus du jeu de données, 274 (soit 20.5%) sont fumeurs.  
+
+Concernant le sexe, cette variable est très bien répartie au niveau du
+jeu de données, on retrouve en effet environ 50% d'hommes et 50% de
+femmes représentés.  
+
+
+#### Conclusion
+
+Cette analyse univariée nous permet de remarquer que ce jeu de données
+semble se concentrer sur des personnes actives avec une variabilité dans
+l'âge, l'IMC, le nombre d'enfants et le prix de l'assurance. Il y a des
+signes d'asymétrie dans certaines variables, en particulier le prix de
+l'assurance.  
+
+#### Corrélation
 
 
 ```{r}
-# Calculate correlation between BMI category and charges
-encoded_bmi <- model.matrix(~ bmi_cat - 1, data = df) %>% as.data.frame()
-encoded_bmi$charges <- df$charges
-
-# Compute the correlation matrix
-correlation_matrix <- cor(encoded_bmi)
-
-# Extract the correlations of "charges" with other variables and sort them
-correlation <- correlation_matrix["charges", ] %>% sort(decreasing = TRUE)
-print(correlation)
-```
-L'analyse de corrélation confirme cette tendance, suggérant une relation positive entre l'IMC et les dépenses médicales.
-
-
-```{r}
-# Boxplot for smoker status vs. charges
-ggplot(df, aes(x = factor(smoker), y = charges, fill = factor(smoker))) +
-  geom_boxplot() +
-  scale_fill_brewer(palette = "Spectral") +
-  labs(title = "Boxplot of Charges by Smoker Status", x = "Smoker", y = "Charges")
-```
-On remarque ici que les non fumeurs payent en des charges beaucoup moins importantes que les non fumeurs.
-
-```{r}
-# Load necessary libraries
 library(ggplot2)
-# Scatter plot of charges vs bmi, colored by smoker
-ggplot(df, aes(x = bmi, y = charges, color = factor(smoker))) +
-  geom_point() +
-  theme_minimal()
+library(reshape2)
 
-```
-Ce graphique confirme ce que nous avons vu précédement. Les charges augmentent de facon linéaire 
-pour les personnes fumeurs alors qu'elles restent assez stables pour les personnes non fumeuses
-
-
-```{r}
-# Age analysis
-ggplot(df, aes(y = age)) +
-  geom_boxplot(fill = "blue", color = "black") +
-  labs(title = "Boxplot for Age", y = "Age")
-```
-On remarque que notre dataset représente exclusivement des personnes actives (entre 18 et 60 ans)
-
-
-```{r}
-# Histogram of charges by age range
-ggplot(df, aes(x = age, weight = charges)) +
-  geom_histogram(breaks = seq(15, 70, by = 5), fill = "blue", color = "black") +
-  labs(title = "Histogram of Charges by Age Range", x = "Age", y = "Charges")
-```
-On remarque que le cout de l'assurance maladie augmente petit à petit en fonction de l'âge.
-
-
-
-```{r}
-# Children count
-table(df$children)
-
-```
-Le dataset se focalise principalement sur des personnes ayant entre 0 et 3 enfants
-
-
-```{r}
-# Load necessary libraries
-library(ggplot2)
-library(reshape2) # For melt function
-
-# Calculate the correlation matrix for numeric columns
 corr_matrix <- cor(df %>% select_if(is.numeric))
-
-# Reshape the correlation matrix to long format for ggplot
 corr_melt <- melt(corr_matrix)
-
-# Plot the heatmap
 ggplot(corr_melt, aes(Var1, Var2, fill = value)) +
   geom_tile(color = "white") +
   scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0) +
@@ -160,18 +264,162 @@ ggplot(corr_melt, aes(Var1, Var2, fill = value)) +
   coord_fixed()
 
 ```
-On remrque comme nous l'avions vu précédement que les predicteurs ne font pas très fortement corrélés appart 
-la variable fumeur qui a une importance capitale
+Nous avons commencé par examiner la matrice de corrélation des
+variables, présentée dans la figure ci-dessus,
+afin de déterminer les relations linéaires entre les variables. Cette
+matrice nous permet de visualiser les niveaux de corrélation entre
+chaque paire de variables.  
 
-## Preprocessing des données
+Dans cette figure, nous nous intéressons surtout à la variable
+\"charges\" et \"smoker\". Ces variables correspondent respectivement aux coûts 
+d'assurance et au statut tabagique de la personne. Il semble que les trois
+variables ayant la corrélation la plus forte avec les charges soient, dans
+l'ordre décroissant : le statut tabagique, l'âge et l'IMC.  
 
-On cherche à améliorer les données grâce aux informations que nous avons pu remarqué précédement.
+### L'impact du tabagisme sur les charges
 
-1) Encodage das variables smoker et sex
-2) One hot encoding pour la variable région
-3) scaling de l'age, children et BMI
 
-Ces modifications sont enregistrés dans le fichier data/medical_insurance_scaled.csv
+```{r}
+# Ensure 'smoker_original' is a factor with the correct levels
+df$smoker_original <- factor(df$smoker_original, levels = c("no", "yes"))
+
+# Plot the histogram
+ggplot(df, aes(x = charges, fill = smoker_original)) +
+  geom_histogram(bins = 30, position = "identity", alpha = 0.3) +
+  scale_fill_manual(values = c("no" = "blue", "yes" = "red"), name = "Smoker") +
+  labs(title = "Histogram of Charges by Smoking Status",
+       x = "Charges",
+       y = "Number of People") +
+  theme_minimal()
+
+```
+
+Cette figure illustre une corrélation significative
+entre le prix de l'assurance et le statut tabagique d'un individu. Les
+personnes non-fumeuses, représentées en bleu, ont tendance à payer des
+frais médicaux moins élevés que les fumeurs, représentés en rouge. Cette
+différence de coût suggère que le tabagisme est un facteur déterminant
+dans la fixation des tarifs d'assurance. En effet, les fumeurs sont
+généralement considérés comme présentant un risque plus élevé pour la
+santé, ce qui se traduit par des coûts d'assurance plus élevés. Par
+conséquent, cette figure met en évidence l'importance du statut
+tabagique dans la détermination des groupes tarifaires d'assurance
+maladie.  
+
+### L'impact de l'âge sur les charges
+
+```{r}
+# Histogram of charges by age range
+ggplot(df, aes(x = age, weight = charges)) +
+  geom_histogram(breaks = seq(15, 70, by = 5), fill = "blue", color = "black") +
+  labs(title = "Histogram of Charges by Age Range", x = "Age", y = "Charges")
+```
+
+
+Cet histogramme permet de constater l'évolution du prix de l'assurance
+en fonction de l'âge. On remarque une relation de corrélation entre le
+prix de l'assurance et l'âge. Cette relation suggère que les personnes
+plus âgées ont tendance à avoir des coûts médicaux plus élevés.  
+
+
+### L'impact de l'IMC sur les charges
+
+```{r}
+# Define the quartiles
+q1 <- 26.22
+q2 <- 30.45
+q3 <- 34.77
+
+# Filter the data for charges greater than 30,000
+df_filtered <- df %>% filter(charges > 30000)
+
+# Create BMI categories based on the quartiles
+df_filtered$bmi_cat <- cut(df_filtered$bmi, breaks = c(-Inf, q1, q2, q3, Inf),
+                           labels = c("Q1: <26.22", "Q2: 26.22-30.45", "Q3: 30.45-34.77", "Q4: >34.77"))
+
+# Create the histogram
+ggplot(df_filtered, aes(x = bmi_cat, fill = bmi_cat)) +
+  geom_bar(position = "dodge", size = 1.2) +
+  scale_fill_manual(values = c("Q1: <26.22" = "blue", "Q2: 26.22-30.45" = "green",
+                               "Q3: 30.45-34.77" = "orange", "Q4: >34.77" = "red")) +
+  labs(title = "Distribution of BMI Categories for Charges > $30,000",
+       x = "BMI Category",
+       y = "Number of People") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+Pour cette analyse, nous avons divisé les données en quatre catégories
+en utilisant les quartiles de l'IMC, ce qui nous permet de mieux
+appréhender l'impact de l'IMC sur les frais médicaux.  
+
+Les différents quartiles d'IMC sont : $q_1=26.22$, $q_2=30.45$,
+$q_3=34.77$.  
+
+Nous observons sur la figure que 50% des 340 assurés ayant
+des charges supérieures à 30 000\$ sont des personnes avec un IMC
+supérieur à 34.77, tandis que 87% de ces 340 assurances sont des
+personnes avec un IMC supérieur à 30.4475.  
+
+## Analyse multivariée
+
+Cette approche nous permet de comprendre comment différentes
+combinaisons de variables peuvent influencer les coûts médicaux aux
+États-Unis. En examinant ces relations plus complexes, nous pourrons
+identifier des patterns et des interactions qui pourraient ne pas être
+évidents dans une analyse bivariée.  
+
+Les différents graphiques que nous avons pu réaliser pour visualiser les
+liens entre l'âge, le sexe la région et le nombre d'enfants ne
+démontrent pas de lien particulier. On note néanmoins une augmentation
+linéaire du prix de l'assurance comme nous avions pu le constater lors
+de l'analyse de la figure illustrant les charges selon l'âge.  
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+# Scatter plot of charges vs bmi, colored by smoker
+ggplot(df, aes(x = bmi, y = charges, color = factor(smoker))) +
+  geom_point() +
+  theme_minimal()
+
+```
+Dans cette figure illustrant l'IMC par rapport aux charges, on révèle une forte corrélation 
+entre l'IMC, le statut tabagique et les frais médicaux. Plus précisément, on peut
+observer une relation linéaire entre l'âge et les coûts médicaux chez
+les fumeurs, tandis que cette relation n'est pas aussi marquée chez les
+non-fumeurs. Cette observation suggère que le tabagisme est un facteur
+important dans l'augmentation des coûts médicaux avec l'âge, et que
+l'IMC peut être un indicateur utile pour estimer les coûts médicaux
+futurs chez les fumeurs.  
+
+```{r}
+ggplot(df, aes(x = factor(sex), y = charges, fill = factor(smoker))) +
+  geom_boxplot() +
+  scale_fill_brewer(palette = "Spectral") +
+  labs(title = "Boxplot of Charges by Sex Status", x = "Sex", y = "Charges")
+```
+Le boxplot des charges par statut de sexe et de tabagisme révèle des informations 
+intéressantes sur les coûts des assurances maladie. En observant les médianes et 
+les intervalles interquartiles, on constate qu'il n'y a pas de différence 
+significative dans le prix de l'assurance maladie entre les hommes et les femmes. 
+Les distributions des charges pour les deux sexes sont relativement similaires, 
+indiquant que le sexe n'est pas un facteur déterminant majeur des coûts d'assurance.   
+
+Cependant, le statut de tabagisme semble avoir un impact beaucoup plus marqué. 
+Les individus fumeurs, qu'ils soient hommes ou femmes, présentent des charges 
+médicales nettement plus élevées par rapport aux non-fumeurs. Les boxplots 
+montrent que les fumeurs ont des médianes de charges plus élevées et des 
+distributions plus larges, indiquant une plus grande variabilité et des coûts 
+potentiellement plus élevés. Cette observation souligne que le tabagisme est 
+un facteur important influençant les coûts des assurances maladie, indépendamment 
+du sexe.  
+
+
+# Transformation et encodage des variables
+
 ```{r}
 library(dplyr)
 library(readr)
@@ -207,46 +455,85 @@ df_quant <- predict(scaler, df[, c("age", "children", "bmi")])
 df_non_quant <- df %>% select(-c(age, children, bmi))
 scaled_data <- cbind(df_quant, df_non_quant)
 
+# Save the scaled data to a new CSV file
+write.csv(scaled_data, "data/medical_insurance_scaled.csv", row.names = FALSE)
+```
+
+Comme nous l'avons vu, trois variables sont catégorielles : le sexe, le
+statut tabagique et la région. Il faut les encoder pour pouvoir
+effectuer des calculs mathématiques.
+
+Tout d'abord le label encoding permet de transformer une colonne en un
+ensemble de nombres. Ainsi, nous allons pouvoir transformer le sexe
+femme/homme en 0/1, de même pour le statut tabagique. Cet encodage
+pourrait induire un ordre dans des variables catégorielles sans qu'il
+n'en existe un dans le monde réel, les régions n'ayant pas d'ordre, nous
+allons devoir utiliser un autre encodage.
+
+Nous allons utiliser le One hot encoding, afin de transformer une
+colonne en un ensemble de colonne binaire pour chacune des valeurs. Ici,
+comme nous l'avons vu lors de l'EDA, la région ne possède que quatre
+valeurs donc nous n'augmentons la dimension que de 3 ce qui est
+raisonnable. Une piste de réflexion est de reproduire les étapes
+suivantes en utilisant du label encoding et voir s'il y a un impact sur
+la précision de nos modèles.
+
+
+# Modèles de machine learning
+
+
+
+## TODO : Reprendre ici 
+
+
+```{r}
+# Calculate correlation between BMI category and charges
+encoded_bmi <- model.matrix(~ bmi_cat - 1, data = df) %>% as.data.frame()
+encoded_bmi$charges <- df$charges
+
+# Compute the correlation matrix
+correlation_matrix <- cor(encoded_bmi)
+
+# Extract the correlations of "charges" with other variables and sort them
+correlation <- correlation_matrix["charges", ] %>% sort(decreasing = TRUE)
+print(correlation)
+```
+L'analyse de corrélation confirme cette tendance, suggérant une relation positive entre l'IMC et les dépenses médicales.
+
+
+## Visualisation de la répartition des charges 
+
+```{r}
+library(dplyr)
+library(readr)
+library(caret)
+
+# Load the data
+df <- read.csv("data/medical_insurance.csv", sep = ",")
+
+# Remove duplicates
+df <- distinct(df)
+
+# Encode the "smoker" and "sex" columns as binary variables
+df$smoker <- as.numeric(as.factor(df$smoker)) - 1
+df$sex <- as.numeric(as.factor(df$sex)) - 1
+
+# Convert the "region" column to a numerical factor
+df$region <- as.numeric(factor(df$region, levels = c("southeast", "southwest", "northeast", "northwest"))) - 1
+
+# Standardize the "age", "children", and "bmi" columns (optional based on your preference)
+scaler <- preProcess(df[, c("age", "children", "bmi")], method = c("center", "scale"))
+df_quant <- predict(scaler, df[, c("age", "children", "bmi")])
+
+# Combine the scaled quantitative data with non-quantitative columns
+df_non_quant <- df %>% select(-c(age, children, bmi))
+scaled_data <- cbind(df_quant, df_non_quant)
+
 # Preview the result
 head(scaled_data)
 
 # Save the scaled data to a new CSV file
 write.csv(scaled_data, "data/medical_insurance_scaled.csv", row.names = FALSE)
-```
-
-## Visualisation de la répartition des charges 
-
-```{r}
-# Libraries
-library(dplyr)
-library(ggplot2)
-library(caret)
-library(Matrix)
-library(cluster)
-library(kernlab)
-
-# Load Data
-df <- read.csv("data/medical_insurance.csv", sep = ",")
-df <- distinct(df)
-
-# Encode "smoker" and "sex" columns as binary variables
-df$smoker <- as.numeric(as.factor(df$smoker)) - 1
-df$sex <- as.numeric(as.factor(df$sex)) - 1
-
-# One-hot encode the "region" column
-encoded_region <- model.matrix(~ region - 1, data = df)
-colnames(encoded_region) <- c("northeast", "northwest", "southeast", "southwest")
-df <- cbind(df, encoded_region)
-
-# Drop the original "region" column
-df <- df %>% select(-region)
-
-# Plot: Segmentation into charge zones
-ggplot(df) + 
-  geom_histogram(aes(x = charges), bins = 30, fill = "blue", data = df %>% filter(charges < 10000)) +
-  geom_histogram(aes(x = charges), bins = 30, fill = "green", data = df %>% filter(charges >= 10000 & charges <= 30000)) +
-  geom_histogram(aes(x = charges), bins = 30, fill = "red", data = df %>% filter(charges > 30000)) +
-  labs(title = "Histogram of Charges", x = "Charges", y = "Number of People")
 ```
 Zone bleue (Charges < 10 000) : La majorité des individus ont des dépenses médicales inférieures à 10 000. Cela montre une grande concentration de personnes avec des coûts de santé relativement bas.
 
@@ -256,9 +543,112 @@ Zone rouge (Charges > 30 000) : Peu de personnes ont des dépenses médicales su
 
 La majorité des dépenses sont concentrées dans la zone de coûts faibles, tandis que les dépenses élevées sont rares mais significatives en termes de montant.
 
+```{r}
+ggplot(df) + 
+  geom_histogram(aes(x = charges), bins = 30, fill = "blue", data = df %>% filter(charges < 10000)) +
+  geom_histogram(aes(x = charges), bins = 30, fill = "green", data = df %>% filter(charges >= 10000 & charges <= 30000)) +
+  geom_histogram(aes(x = charges), bins = 30, fill = "red", data = df %>% filter(charges > 30000)) +
+  labs(title = "Histogram of Charges", x = "Charges", y = "Number of People")
+```
 
 
-## Reprendre ici
+## Classification sur les smokers
+
+
+On essaye de gérer l'équilibrage des classes ne utilisant des poids
+```{r}
+class_counts <- table(df$smoker)
+total_samples <- sum(class_counts)
+weights <- total_samples / (2 * class_counts)  # Scaling by 2 keeps total weight as 1
+weights
+```
+
+
+
+```{r}
+library(caret)
+
+# Split data into training and testing sets (e.g., 80% train, 20% test)
+set.seed(123)  # For reproducibility
+train_index <- createDataPartition(df$smoker, p = 0.8, list = FALSE)
+train_data <- df[train_index, ]
+test_data <- df[-train_index, ]
+
+# Ensure that both train and test sets have `smoker` as a factor with the same levels
+train_data$smoker <- factor(train_data$smoker, levels = c(0, 1))
+test_data$smoker <- factor(test_data$smoker, levels = c(0, 1))
+
+# Calculate class weights based on the training set
+class_counts <- table(train_data$smoker)
+total_samples <- sum(class_counts)
+weights <- total_samples / (2 * class_counts)  # Ensures total weight of 1
+sample_weights <- ifelse(train_data$smoker == 0, weights[1], weights[2])
+
+# Define training control with cross-validation
+train_control <- trainControl(method = "cv", number = 5)
+
+# Train a weighted Random Forest model
+model_rf <- train(
+  smoker ~ ., 
+  data = train_data, 
+  method = "rf", 
+  trControl = train_control,
+  weights = sample_weights
+)
+
+# Train a weighted Linear Discriminant Analysis (LDA) model
+model_lda <- train(
+  smoker ~ ., 
+  data = train_data, 
+  method = "lda", 
+  trControl = train_control,
+  weights = sample_weights
+)
+
+# Train a weighted Logistic Regression model
+model_logistic <- train(
+  smoker ~ ., 
+  data = train_data, 
+  method = "glm", 
+  family = "binomial",
+  trControl = train_control,
+  weights = sample_weights
+)
+
+# Train a weighted Gradient Boosting model
+# model_gbm <- train(
+#   smoker ~ ., 
+#   data = train_data, 
+#   method = "gbm",
+#   trControl = train_control,
+#   weights = sample_weights,
+#   verbose = FALSE
+# )
+
+# Model Evaluation
+evaluate_model <- function(model, test_data) {
+  predictions <- predict(model, newdata = test_data)
+  predictions <- factor(predictions, levels = levels(test_data$smoker))  # Ensure factor levels are the same
+  confusion_matrix <- confusionMatrix(predictions, test_data$smoker)
+  return(confusion_matrix)
+}
+
+# Evaluate all models on the test set
+cat("Random Forest Performance:\n")
+print(evaluate_model(model_rf, test_data))
+
+cat("\nLDA Performance:\n")
+print(evaluate_model(model_lda, test_data))
+
+cat("\nLogistic Regression Performance:\n")
+print(evaluate_model(model_logistic, test_data))
+
+# cat("\nGradient Boosting Performance:\n")
+# print(evaluate_model(model_gbm, test_data))
+
+```
+
+
 
 ```{r}
 # Load libraries
@@ -268,41 +658,60 @@ library(rpart)
 library(randomForest)
 library(kknn)
 library(e1071)
+library(tidymodels)  # For feature scaling and one-hot encoding
+#library(vip)  # For feature importance
 set.seed(123)
 
-df_without_charges <- df
-
-# Vérifiez si 'charges' existe dans le dataframe et filtrez les valeurs NA dans 'charges'
-if("charges" %in% names(df_without_charges)) {
-  df_without_charges <- df_without_charges %>% filter(!is.na(charges))
+# Check if 'charges' exists in the dataframe and filter out NA values
+if("charges" %in% names(df)) {
+  df <- df %>% filter(!is.na(charges))
 } else {
-  stop("La colonne 'charges' n'existe pas dans le dataframe.")
+  stop("The 'charges' column does not exist in the dataframe.")
 }
 
 # Add charge groups and drop "charges" column
-df_without_charges <- df_without_charges %>% mutate(charges_group = cut(charges, breaks = c(0, 10000, 30000, Inf), labels = c(0, 1, 2)))
-df_without_charges <- df_without_charges %>% select(-charges)
+df <- df %>% mutate(charges_group = cut(charges, breaks = c(0, 10000, 30000, Inf), labels = c(0, 1, 2)))
+df <- df %>% select(-charges)
 
 # Convert charges_group to factor for classification
-df_without_charges$charges_group <- as.factor(df_without_charges$charges_group)
+df$charges_group <- as.factor(df$charges_group)
+
+# Split data into training and testing sets
+training_samples <- df$charges_group %>%
+  createDataPartition(p = 0.8, list = FALSE)
+training_set <- df[training_samples, ]
+testing_set <- df[-training_samples, ]
+
+# Create a recipe for preprocessing
+recipe <- recipe(charges_group ~ ., data = training_set) %>%
+  step_normalize(all_predictors()) %>%
+  step_dummy(all_nominal_predictors())
+
+# Apply the recipe to create a training set for modeling
+training_set <- prep(recipe, training_set) %>%
+  juice() %>%
+  as.data.frame()
 
 # Define train control with 5-fold cross-validation
 ctrl <- trainControl(method = "cv", number = 5)
 
-# Train each model with cross-validation
+# Train each model with cross-validation and parameter tuning
 models_cv <- list()
 
 # Decision Tree
-models_cv$DecisionTree <- train(charges_group ~ ., data = df_without_charges, method = "rpart", trControl = ctrl)
+models_cv$DecisionTree <- train(charges_group ~ ., data = training_set, method = "rpart", trControl = ctrl, tuneGrid = expand.grid(cp = seq(0.01, 0.1, 0.01)))
 
 # K-Nearest Neighbors
-#models_cv$KNeighbors <- train(charges_group ~ ., data = df_without_charges, method = "kknn", trControl = ctrl, tuneGrid = expand.grid(k = 5))
+models_cv$KNeighbors <- train(charges_group ~ ., data = training_set, method = "kknn", trControl = ctrl,
+                              tuneGrid = expand.grid(kmax = seq(1, 10, 1), distance = 2, kernel = "optimal"))
+
 
 # Naive Bayes
-models_cv$NaiveBayes <- train(charges_group ~ ., data = df_without_charges, method = "nb", trControl = ctrl)
+models_cv$NaiveBayes <- train(charges_group ~ ., data = training_set, method = "nb", trControl = ctrl)
 
 # Random Forest
-models_cv$RandomForest <- train(charges_group ~ ., data = df_without_charges, method = "rf", trControl = ctrl)
+# Random Forest
+models_cv$RandomForest <- train(charges_group ~ ., data = df, method = "rf", trControl = ctrl)
 
 # Extract accuracies from cross-validation results
 results_cv <- sapply(models_cv, function(model) {
@@ -317,23 +726,27 @@ results_cv <- data.frame(
 
 print(results_cv)
 
+# Interpret the Random Forest model
+#vip(models_cv$RandomForest$finalModel)
+
 ```
 
 
 ```{r}
 # Adjusted hyperparameter tuning grid for caret with RandomForest
-rf_grid <- expand.grid(
-  mtry = c(2, 4, 6, 8)  # mtry is the number of variables available for splitting at each tree node
-)
+# rf_grid <- expand.grid(
+#   mtry = c(2, 4, 6, 8)  # mtry is the number of variables available for splitting at each tree node
+# )
+# 
+# # Define train control with cross-validation
+# ctrl <- trainControl(method = "cv", number = 3)
 
-# Define train control with cross-validation
-ctrl <- trainControl(method = "cv", number = 3)
-
-# Train RandomForest model with tuning grid
-rf_model <- train(charges_group ~ ., data = train, method = "rf", trControl = ctrl, tuneGrid = rf_grid)
-
-# Output best parameters found
-print(rf_model$bestTune)
+# # Train RandomForest model with tuning grid
+# rf_model <- train(charges_group ~ ., data = train, method = "rf", trControl = ctrl, tuneGrid = rf_grid)
+# 
+# # Output best parameters found
+# print(rf_model$bestTune)
+# print(rf_model$results)
 
 ```
 
