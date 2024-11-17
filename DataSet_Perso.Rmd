@@ -447,16 +447,27 @@ df <- cbind(df, encoded_region)
 # Drop the original "region" column
 df <- df %>% select(-region)
 
-# Standardize the "age", "children", and "bmi" columns
-scaler <- preProcess(df[, c("age", "children", "bmi")], method = c("center", "scale"))
-df_quant <- predict(scaler, df[, c("age", "children", "bmi")])
+# Standardize the "age", and "bmi" columns
+scaler <- preProcess(df[, c("age", "bmi")], method = c("center", "scale"))
+df_quant <- predict(scaler, df[, c("age", "bmi")])
 
 # Combine the scaled quantitative data with non-quantitative columns
-df_non_quant <- df %>% select(-c(age, children, bmi))
+df_non_quant <- df %>% select(-c(age, bmi))
 scaled_data <- cbind(df_quant, df_non_quant)
 
 # Save the scaled data to a new CSV file
 write.csv(scaled_data, "data/medical_insurance_scaled.csv", row.names = FALSE)
+
+# Standardize the "age", "bmi", and "charges" columns
+scaler <- preProcess(df[, c("age", "bmi", "charges")], method = c("center", "scale"))
+df_scaled_quant <- predict(scaler, df[, c("age", "bmi", "charges")])
+
+# Combine the scaled quantitative data with non-quantitative columns
+df_non_quant <- df %>% select(-c(age, bmi, charges))
+scaled_data <- cbind(df_scaled_quant, df_non_quant)
+
+# Save the scaled data to a new CSV file
+write.csv(scaled_data, "data/medical_insurance_scaled_class.csv", row.names = FALSE)
 ```
 
 Comme nous l'avons vu, trois variables sont catégorielles : le sexe, le
@@ -481,10 +492,889 @@ la précision de nos modèles.
 
 # Modèles de machine learning
 
+```{r}
+missing_values <- colSums(is.na(df))
+missing_values <- missing_values[missing_values > 0]
+if (length(missing_values) > 0) {
+  cat("Missing values in the dataset:\n")
+  print(missing_values)
+} else {
+  cat("No missing values in the dataset\n")
+}
+```
+
+```{r}
+df_preprocess <- read.csv("data/medical_insurance_scaled.csv", sep = ",")
+df_preprocess_class <- read.csv("data/medical_insurance_scaled_class.csv", sep = ",")
+
+data <- read.csv("data/medical_insurance_scaled_class.csv", sep = ",")
+
+# Create copies of original data
+data_with_outliers <- data
+data_cleaned <- data
+
+# Define continuous variables (based on inspection)
+continuous_vars <- c("age", "bmi", "charges")
+
+# Remove outliers for continuous variables only
+for (var in continuous_vars) {
+  Q1 <- quantile(data_cleaned[[var]], 0.25, na.rm = TRUE)
+  Q3 <- quantile(data_cleaned[[var]], 0.75, na.rm = TRUE)
+  IQR_val <- Q3 - Q1
+  
+  lower_bound <- Q1 - 1.5 * IQR_val
+  upper_bound <- Q3 + 1.5 * IQR_val
+  
+  # Remove rows with outliers in any continuous variable
+  data_cleaned <- data_cleaned[!(data_cleaned[[var]] < lower_bound | data_cleaned[[var]] > upper_bound), ]
+}
+
+# Calculate the ratio of rows deleted
+cat("Rows deleted due to outliers:", (1 - nrow(data_cleaned) / nrow(data)) * 100, "%\n")
+
+write.csv(data_cleaned, "data/medical_insurance_scaled_class_without_ouliers.csv", row.names = FALSE)
+
+```
+
+```{r}
+df_preprocess_class_without_outliers <- read.csv("data/medical_insurance_scaled_class_without_ouliers.csv", sep = ",")
+set.seed(123) # For reproducibility
+train_indices <- createDataPartition(df_preprocess_class_without_outliers$smoker, p = 0.8, list = FALSE)
+train_data <- df_preprocess_class_without_outliers[train_indices, ]
+test_data <- df_preprocess_class_without_outliers[-train_indices, ]
+```
+
+## Classification
+
+```{r}
+library(caret)
+library(e1071)
+library(ROSE)
+library(dplyr)
+library(MASS)
+library(klaR)
+library(randomForest) 
+library(class)
+library(rpart)
+
+train_data$smoker <- as.factor(train_data$smoker)
+test_data$smoker <- as.factor(test_data$smoker)
+
+levels(test_data$smoker) <- levels(train_data$smoker)
+
+evaluate_model <- function(model_name, model, test_data, true_labels) {
+  if (model_name %in% c("lda", "qda", "rda")) {
+    predictions <- predict(model, newdata = test_data)$class
+  } else if (model_name == "knn") {
+    predictions <- knn(train = train_data[, c("bmi", "charges")], test = test_data[, c("bmi", "charges")], cl = train_data$smoker, k = 5)
+  } else if (model_name == "logistic_regression") {
+    probabilities <- predict(model, newdata = test_data, type = "response")
+    predictions <- ifelse(probabilities > 0.5, 1, 0)  # Convert probabilities to binary labels
+    predictions <- factor(predictions, levels = levels(true_labels))
+  } else if (model_name == "decision_tree") {
+    probabilities <- predict(model, newdata = test_data, type = "prob")
+    predictions <- colnames(probabilities)[max.col(probabilities)]
+    predictions <- factor(predictions, levels = levels(true_labels))
+  } else {
+    predictions <- predict(model, newdata = test_data)
+  }
+
+  levels <- levels(true_labels)
+  metrics <- multiClassSummary(data.frame(pred = predictions, obs = true_labels), lev = levels)
+
+  # Calculate Precision and Recall
+  confusion_matrix <- table(predictions, true_labels)
+  precision <- diag(confusion_matrix) / colSums(confusion_matrix)
+  recall <- diag(confusion_matrix) / rowSums(confusion_matrix)
+
+  return(list(
+    Accuracy = metrics["Accuracy"],
+    Precision = mean(precision),
+    Recall = mean(recall)
+  ))
+}
+
+sample_data <- function(data, method = "none") {
+  if (method == "up") {
+    # Oversampling using ROSE
+    data_balanced <- ROSE(smoker ~ ., data = data, seed = 123)$data
+  } else if (method == "down") {
+    # Undersampling using ROSE
+    data_balanced <- ovun.sample(smoker ~ ., data = data, method = "under", seed = 123)$data
+  } else {
+    # No sampling
+    data_balanced <- data
+  }
+  return(data_balanced)
+}
+
+set.seed(123)
+sampling_methods <- c("none", "up", "down")
+
+results <- data.frame(
+  Model = character(),
+  Sampling_Method = character(),
+  Accuracy = double(),
+  Precision = double(),
+  Recall = double()
+)
+
+find_best_rda_params <- function(train_data, formula) {
+  lambdas <- seq(0, 1, by = 0.1)    # Range for lambda
+  gammas <- seq(0, 0.5, by = 0.05)  # Range for gamma
+
+  best_params <- list(lambda = 0, gamma = 0, accuracy = 0)
+
+  for (l in lambdas) {
+    for (g in gammas) {
+      tryCatch({
+        model <- rda(formula, data = train_data, gamma = g, lambda = l)
+        preds <- predict(model, train_data)$class
+        acc <- mean(preds == train_data$smoker)
+
+        if (acc > best_params$accuracy) {
+          best_params <- list(lambda = l, gamma = g, accuracy = acc)
+        }
+      }, error = function(e) NULL)
+    }
+  }
+  return(best_params)
+}
+
+models <- list(
+  naive_bayes = function(data) naiveBayes(smoker ~ bmi + charges, data = data),
+  lda = function(data) lda(smoker ~ bmi + charges, data = data),
+  qda = function(data) qda(smoker ~ bmi + charges, data = data),
+  rda = function(data) {
+    best_params <- find_best_rda_params(data, smoker ~ bmi + charges)
+    rda(smoker ~ bmi + charges, data = data, gamma = best_params$gamma, lambda = best_params$lambda)
+  },
+  randomForest = function(data) randomForest(smoker ~ bmi + charges, data = data),
+  logistic_regression = function(data) glm(smoker ~ bmi + charges, data = data, family = binomial),
+  knn = function(data) {
+    NULL
+  },
+  svm = function(data) svm(smoker ~ bmi + charges, data = data, kernel = "linear"),
+  svm_poly = function(data) svm(smoker ~ bmi + charges, data = data, kernel = "polynomial"),
+  svm_gaussian = function(data) svm(smoker ~ bmi + charges, data = data, kernel = "radial"),
+  decision_tree = function(data) rpart(smoker ~ bmi + charges, data = data, method = "class")
+)
+
+for (sampling_method in sampling_methods) {
+  print(paste("Sampling method:", sampling_method))
+  flush.console()
+
+  sampled_train <- sample_data(train_data, sampling_method)
+
+  for (model_name in names(models)) {
+    print(paste("Training model:", model_name))
+    flush.console()
+
+    model <- models[[model_name]](sampled_train)
+
+    test_metrics <- evaluate_model(model_name, model, test_data, test_data$smoker)
+
+    results <- rbind(results, data.frame(
+      Model = model_name,
+      Sampling_Method = sampling_method,
+      Accuracy = test_metrics$Accuracy,
+      Precision = test_metrics$Precision,
+      Recall = test_metrics$Recall
+    ))
+    rownames(results) <- NULL
+  }
+}
+
+sorted_results <- results[order(-results$Accuracy), ]
+
+print(sorted_results)
+```
+
+
+
+## Regression 
+
+```{r}
+
+# TODO : Implement 
+# Simple Linear Regression
+# Multiple Linear Regression
+# Polynomial Regression
+# Ridge Regression (L2 Regularization)
+# Lasso Regression (L1 Regularization)
+# Elastic Net Regression
+# Decision Tree Regression
+# Random Forest Regression
+# Support Vector Regression
+# k-Nearest Neighbors Regression
+# Kernel Regression
+ 
+
+
+# Load necessary libraries
+library(caret)
+library(e1071)
+library(dplyr)
+library(MASS)  # For lda function
+library(klaR)  # For rda function
+library(randomForest)  # For randomForest function
+library(class)  # For knn function
+library(rpart)  # For decision tree function
+
+# Load the dataset
+df_preprocess_reg <- read.csv("data/medical_insurance_scaled.csv", sep = ",")
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Create train-test split for regression
+train_indices <- createDataPartition(df_preprocess_reg$charges, p = 0.8, list = FALSE)
+train_data_reg <- df_preprocess_reg[train_indices, ]
+test_data_reg <- df_preprocess_reg[-train_indices, ]
+
+# Convert "charges" to a numeric variable
+train_data_reg$charges <- as.numeric(train_data_reg$charges)
+test_data_reg$charges <- as.numeric(test_data_reg$charges)
+
+# Define the evaluation function for regression
+evaluate_model <- function(model_name, model, test_data_reg, true_labels) {
+  predictions <- predict(model, newdata = test_data_reg)
+
+  # Calculate MAE, MSE, and R-squared
+  mae <- mean(abs(predictions - true_labels))
+  mse <- mean((predictions - true_labels)^2)
+  r_squared <- 1 - (sum((predictions - true_labels)^2) / sum((true_labels - mean(true_labels))^2))
+
+  return(list(
+    MAE = mae,
+    MSE = mse,
+    R_squared = r_squared
+  ))
+}
+
+# Initialize results dataframe
+results <- data.frame(
+  Model = character(),
+  MAE = double(),
+  MSE = double(),
+  R_squared = double()
+)
+
+# Define the models to train
+models <- list(
+  linear_regression = function(data) lm(charges ~ ., data = data),
+  randomForest = function(data) randomForest(charges ~ ., data = data),
+  decision_tree = function(data) rpart(charges ~ ., data = data, method = "anova"),
+  svm = function(data) svm(charges ~ ., data = data, kernel = "linear"),
+  svm_poly = function(data) svm(charges ~ ., data = data, kernel = "polynomial"),
+  svm_gaussian = function(data) svm(charges ~ ., data = data, kernel = "radial")
+)
+
+# Train and evaluate each model
+for (model_name in names(models)) {
+  print(paste("Training model:", model_name))
+  flush.console()
+
+  # Train model
+  model <- models[[model_name]](train_data_reg)
+
+  # Evaluate on test set
+  test_metrics <- evaluate_model(model_name, model, test_data_reg, test_data_reg$charges)
+
+  # Add results
+  results <- rbind(results, data.frame(
+    Model = model_name,
+    MAE = test_metrics$MAE,
+    MSE = test_metrics$MSE,
+    R_squared = test_metrics$R_squared
+  ))
+  rownames(results) <- NULL
+}
+
+# Sort the results by R-squared
+sorted_results <- results[order(-results$R_squared), ]
+
+# Print the sorted results
+print(sorted_results)
+
+
+```
+
+```{r}
+# Load necessary libraries
+library(caret)
+library(e1071)
+library(dplyr)
+library(MASS)  # For lda function
+library(klaR)  # For rda function
+library(randomForest)  # For randomForest function
+library(class)  # For knn function
+library(rpart)  # For decision tree function
+library(glmnet)  # For Ridge, Lasso, and Elastic Net regression
+library(kernlab)  # For Kernel regression
+
+# Load the dataset
+df_preprocess_reg <- read.csv("data/medical_insurance_scaled.csv", sep = ",")
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Create train-test split for regression
+train_indices <- createDataPartition(df_preprocess_reg$charges, p = 0.8, list = FALSE)
+train_data_reg <- df_preprocess_reg[train_indices, ]
+test_data_reg <- df_preprocess_reg[-train_indices, ]
+
+# Convert "charges" to a numeric variable
+train_data_reg$charges <- as.numeric(train_data_reg$charges)
+test_data_reg$charges <- as.numeric(test_data_reg$charges)
+
+# Define the evaluation function for regression
+evaluate_model <- function(model_name, model, test_data_reg, true_labels) {
+  predictions <- predict(model, newdata = test_data_reg)
+
+  # Calculate MAE, MSE, and R-squared
+  mae <- mean(abs(predictions - true_labels))
+  mse <- mean((predictions - true_labels)^2)
+  r_squared <- 1 - (sum((predictions - true_labels)^2) / sum((true_labels - mean(true_labels))^2))
+
+  return(list(
+    MAE = mae,
+    MSE = mse,
+    R_squared = r_squared
+  ))
+}
+
+# Initialize results dataframe
+results <- data.frame(
+  Model = character(),
+  MAE = double(),
+  MSE = double(),
+  R_squared = double()
+)
+
+# Define the models to train
+models <- list(
+  simple_linear_regression = function(data) lm(charges ~ bmi, data = data),
+  multiple_linear_regression = function(data) lm(charges ~ ., data = data),
+  polynomial_regression = function(data) lm(charges ~ poly(bmi, 2), data = data)
+  # ridge_regression = function(data) {
+  #   x <- as.matrix(data[, -which(names(data) == "charges")])
+  #   y <- data$charges
+  #   cv.out <- cv.glmnet(x, y, alpha = 0)
+  #   best_lambda <- cv.out$lambda.min
+  #   glmnet(x, y, alpha = 0, lambda = best_lambda)
+  # },
+  # lasso_regression = function(data) {
+  #   x <- as.matrix(data[, -which(names(data) == "charges")])
+  #   y <- data$charges
+  #   cv.out <- cv.glmnet(x, y, alpha = 1)
+  #   best_lambda <- cv.out$lambda.min
+  #   glmnet(x, y, alpha = 1, lambda = best_lambda)
+  # },
+  # elastic_net_regression = function(data) {
+  #   x <- as.matrix(data[, -which(names(data) == "charges")])
+  #   y <- data$charges
+  #   cv.out <- cv.glmnet(x, y, alpha = 0.5)
+  #   best_lambda <- cv.out$lambda.min
+  #   glmnet(x, y, alpha = 0.5, lambda = best_lambda)
+  # },
+  # decision_tree_regression = function(data) rpart(charges ~ ., data = data, method = "anova"),
+  # random_forest_regression = function(data) randomForest(charges ~ ., data = data),
+  # support_vector_regression = function(data) svm(charges ~ ., data = data, kernel = "linear"),
+  # knn_regression = function(data) {
+  #   # KNN does not have a training step, so we return NULL
+  #   NULL
+  # },
+  # kernel_regression = function(data) ksvm(charges ~ ., data = data, kernel = "rbfdot")
+)
+
+# Train and evaluate each model
+for (model_name in names(models)) {
+  print(paste("Training model:", model_name))
+  flush.console()
+
+  # Train model
+  model <- models[[model_name]](train_data_reg)
+
+  # Evaluate on test set
+  if (model_name == "knn_regression") {
+    predictions <- knn.reg(train = train_data_reg[, -which(names(train_data_reg) == "charges")],
+                           test = test_data_reg[, -which(names(test_data_reg) == "charges")],
+                           y = train_data_reg$charges,
+                           k = 5)
+    mae <- mean(abs(predictions - test_data_reg$charges))
+    mse <- mean((predictions - test_data_reg$charges)^2)
+    r_squared <- 1 - (sum((predictions - test_data_reg$charges)^2) / sum((test_data_reg$charges - mean(test_data_reg$charges))^2))
+
+    # Add results
+    results <- rbind(results, data.frame(
+      Model = model_name,
+      MAE = mae,
+      MSE = mse,
+      R_squared = r_squared
+    ))
+    rownames(results) <- NULL
+  } else {
+    test_metrics <- evaluate_model(model_name, model, test_data_reg, test_data_reg$charges)
+
+    # Add results
+    results <- rbind(results, data.frame(
+      Model = model_name,
+      MAE = test_metrics$MAE,
+      MSE = test_metrics$MSE,
+      R_squared = test_metrics$R_squared
+    ))
+    rownames(results) <- NULL
+  }
+}
+
+# Sort the results by R-squared
+sorted_results <- results[order(-results$R_squared), ]
+
+# Print the sorted results
+print(sorted_results)
+
+```
+
 
 
 ## TODO : Reprendre ici 
 
+```{r}
+library(caret)
+library(e1071)
+library(ROSE) # For oversampling and undersampling
+library(dplyr)
+
+# Convert "smoker" to a factor
+train_data$smoker <- as.factor(train_data$smoker)
+test_data$smoker <- as.factor(test_data$smoker)
+
+# Define the evaluation function
+evaluate_model <- function(model, test_data, true_labels) {
+  predictions <- predict(model, newdata = test_data)
+  levels <- levels(true_labels)
+  metrics <- multiClassSummary(data.frame(pred = predictions, obs = true_labels), lev = levels)
+  return(list(
+    Accuracy = metrics["Accuracy"],
+    F1 = metrics["Mean_F1"]
+  ))
+}
+
+# Function to apply sampling techniques
+sample_data <- function(data, method = "none") {
+  if (method == "up") {
+    # Oversampling using ROSE
+    data_balanced <- ROSE(smoker ~ ., data = data, seed = 123)$data
+  } else if (method == "down") {
+    # Undersampling using ROSE
+    data_balanced <- ovun.sample(smoker ~ ., data = data, method = "under", seed = 123)$data
+  } else {
+    # No sampling
+    data_balanced <- data
+  }
+  return(data_balanced)
+}
+
+# Define sampling methods
+set.seed(123)
+sampling_methods <- c("none", "up", "down")
+classification_method <- "naive_bayes"
+
+# Initialize results dataframe
+nb_results <- data.frame(
+  Model = character(),
+  Sampling_Method = character(),
+  Accuracy = double(),
+  F1 = double()
+)
+
+# For each sampling method
+for (sampling_method in sampling_methods) {
+  print(paste("Sampling method:", sampling_method))
+  flush.console()
+  
+  # Apply sampling to training data
+  sampled_train <- sample_data(train_data, sampling_method)
+  
+  # Train model
+  model <- naiveBayes(smoker ~ bmi + charges, data = sampled_train)
+  
+  # Evaluate on test set
+  test_metrics <- evaluate_model(model, test_data, test_data$smoker)
+  
+  # Add results
+  nb_results <- rbind(nb_results, data.frame(
+    Model = classification_method,
+    Sampling_Method = sampling_method,
+    Accuracy = test_metrics$Accuracy,
+    F1 = test_metrics$F1
+  ))
+  rownames(nb_results) <- NULL
+}
+
+# Display the results
+print(nb_results)
+```
+
+```{r}
+library(caret)
+library(e1071)
+library(ROSE) # For oversampling and undersampling
+library(dplyr)
+library(MASS)
+
+# Convert "smoker" to a factor
+train_data$smoker <- as.factor(train_data$smoker)
+test_data$smoker <- as.factor(test_data$smoker)
+
+# Define the evaluation function
+evaluate_model <- function(model, test_data, true_labels) {
+  predictions <- predict(model, newdata = test_data)$class
+  levels <- levels(true_labels)
+  metrics <- multiClassSummary(data.frame(pred = predictions, obs = true_labels), lev = levels)
+  return(list(
+    Accuracy = metrics["Accuracy"],
+    F1 = metrics["Mean_F1"]
+  ))
+}
+
+# Function to apply sampling techniques
+sample_data <- function(data, method = "none") {
+  if (method == "up") {
+    # Oversampling using ROSE
+    data_balanced <- ROSE(smoker ~ ., data = data, seed = 123)$data
+  } else if (method == "down") {
+    # Undersampling using ROSE
+    data_balanced <- ovun.sample(smoker ~ ., data = data, method = "under", seed = 123)$data
+  } else {
+    # No sampling
+    data_balanced <- data
+  }
+  return(data_balanced)
+}
+
+# Define sampling methods
+set.seed(123)
+sampling_methods <- c("none", "up", "down")
+classification_method <- "lda"
+
+# Initialize results dataframe
+lda_results <- data.frame(
+  Model = character(),
+  Sampling_Method = character(),
+  Accuracy = double(),
+  F1 = double()
+)
+
+# For each sampling method
+for (sampling_method in sampling_methods) {
+  print(paste("Sampling method:", sampling_method))
+  flush.console()
+  
+  # Apply sampling to training data
+  sampled_train <- sample_data(train_data, sampling_method)
+  
+  # Train model
+  model <- lda(smoker ~ ., data = sampled_train)
+  
+  # Evaluate on test set
+  test_metrics <- evaluate_model(model, test_data, test_data$smoker)
+  
+  # Add results
+  lda_results <- rbind(lda_results, data.frame(
+    Model = classification_method,
+    Sampling_Method = sampling_method,
+    Accuracy = test_metrics$Accuracy,
+    F1 = test_metrics$F1
+  ))
+  rownames(lda_results) <- NULL
+}
+
+# Display the results
+print(lda_results)
+```
+
+
+```{r}
+library(caret)
+library(e1071)
+library(ROSE) # For oversampling and undersampling
+library(dplyr)
+
+# Convert "smoker" to a factor
+train_data$smoker <- as.factor(train_data$smoker)
+test_data$smoker <- as.factor(test_data$smoker)
+
+# Define the evaluation function
+evaluate_model <- function(model, test_data, true_labels) {
+  predictions <- predict(model, newdata = test_data)$class
+  levels <- levels(true_labels)
+  metrics <- multiClassSummary(data.frame(pred = predictions, obs = true_labels), lev = levels)
+  return(list(
+    Accuracy = metrics["Accuracy"],
+    F1 = metrics["Mean_F1"]
+  ))
+}
+
+# Function to apply sampling techniques
+sample_data <- function(data, method = "none") {
+  if (method == "up") {
+    # Oversampling using ROSE
+    data_balanced <- ROSE(smoker ~ ., data = data, seed = 123)$data
+  } else if (method == "down") {
+    # Undersampling using ROSE
+    data_balanced <- ovun.sample(smoker ~ ., data = data, method = "under", seed = 123)$data
+  } else {
+    # No sampling
+    data_balanced <- data
+  }
+  return(data_balanced)
+}
+
+# Define sampling methods
+set.seed(123)
+sampling_methods <- c("none", "up", "down")
+classification_method <- "qda"
+
+# Initialize results dataframe
+qda_results <- data.frame(
+  Model = character(),
+  Sampling_Method = character(),
+  Accuracy = double(),
+  F1 = double()
+)
+
+# For each sampling method
+for (sampling_method in sampling_methods) {
+  print(paste("Sampling method:", sampling_method))
+  flush.console()
+  
+  # Apply sampling to training data
+  sampled_train <- sample_data(train_data, sampling_method)
+  
+  # Train model
+  model <- qda(smoker  ~ bmi + charges, data = sampled_train)
+  
+  # Evaluate on test set
+  test_metrics <- evaluate_model(model, test_data, test_data$smoker)
+  
+  # Add results
+  qda_results <- rbind(qda_results, data.frame(
+    Model = classification_method,
+    Sampling_Method = sampling_method,
+    Accuracy = test_metrics$Accuracy,
+    F1 = test_metrics$F1
+  ))
+  rownames(qda_results) <- NULL
+}
+
+# Display the results
+print(qda_results)
+```
+
+```{r}
+# Load necessary libraries
+library(caret)
+library(e1071)
+library(ROSE) # For oversampling and undersampling
+library(dplyr)
+library(klaR)  # For rda function
+
+# Convert "smoker" to a factor
+train_data$smoker <- as.factor(train_data$smoker)
+test_data$smoker <- as.factor(test_data$smoker)
+
+# Define the evaluation function
+evaluate_model <- function(model, test_data, true_labels) {
+  predictions <- predict(model, newdata = test_data)$class
+  levels <- levels(true_labels)
+  metrics <- multiClassSummary(data.frame(pred = predictions, obs = true_labels), lev = levels)
+  return(list(
+    Accuracy = metrics["Accuracy"],
+    F1 = metrics["Mean_F1"]
+  ))
+}
+
+# Function to apply sampling techniques
+sample_data <- function(data, method = "none") {
+  if (method == "up") {
+    # Oversampling using ROSE
+    data_balanced <- ROSE(smoker ~ ., data = data, seed = 123)$data
+  } else if (method == "down") {
+    # Undersampling using ROSE
+    data_balanced <- ovun.sample(smoker ~ ., data = data, method = "under", seed = 123)$data
+  } else {
+    # No sampling
+    data_balanced <- data
+  }
+  return(data_balanced)
+}
+
+# Define sampling methods
+set.seed(123)
+sampling_methods <- c("none", "up", "down")
+classification_method <- "rda"
+
+# Initialize results dataframe
+rda_results <- data.frame(
+  Model = character(),
+  Sampling_Method = character(),
+  Accuracy = double(),
+  F1 = double()
+)
+
+# Function to find the best RDA parameters
+find_best_rda_params <- function(train_data, formula) {
+  lambdas <- seq(0, 1, by = 0.1)    # Range for lambda
+  gammas <- seq(0, 0.5, by = 0.05)  # Range for gamma
+
+  best_params <- list(lambda = 0, gamma = 0, accuracy = 0)
+
+  for (l in lambdas) {
+    for (g in gammas) {
+      tryCatch({
+        model <- rda(formula, data = train_data, gamma = g, lambda = l)
+        preds <- predict(model, train_data)$class
+        acc <- mean(preds == train_data$smoker)
+
+        if (acc > best_params$accuracy) {
+          best_params <- list(lambda = l, gamma = g, accuracy = acc)
+        }
+      }, error = function(e) NULL)
+    }
+  }
+  return(best_params)
+}
+
+# For each sampling method
+for (sampling_method in sampling_methods) {
+  print(paste("Sampling method:", sampling_method))
+  flush.console()
+
+  # Apply sampling to training data
+  sampled_train <- sample_data(train_data, sampling_method)
+
+  # Find best parameters for RDA
+  best_params <- find_best_rda_params(sampled_train, smoker ~ bmi + charges)
+
+  # Train model with best parameters
+  model <- rda(smoker ~ bmi+ charges, data = sampled_train,
+               gamma = best_params$gamma,
+               lambda = best_params$lambda)
+
+  # Evaluate on test set
+  test_metrics <- evaluate_model(model, test_data, test_data$smoker)
+
+  # Add results
+  rda_results <- rbind(rda_results, data.frame(
+    Model = classification_method,
+    Sampling_Method = sampling_method,
+    Accuracy = test_metrics$Accuracy,
+    F1 = test_metrics$F1
+  ))
+  rownames(rda_results) <- NULL
+}
+
+# Display the results
+print(rda_results)
+
+```
+
+
+
+```{r}
+# Load necessary libraries
+library(caret)
+library(e1071)
+library(ROSE) # For oversampling and undersampling
+library(dplyr)
+library(randomForest)  # For randomForest function
+
+# Convert "smoker" to a factor
+train_data$smoker <- as.factor(train_data$smoker)
+test_data$smoker <- as.factor(test_data$smoker)
+
+# Define the evaluation function
+evaluate_model <- function(model, test_data, true_labels) {
+  predictions <- predict(model, newdata = test_data)
+  levels <- levels(true_labels)
+  metrics <- multiClassSummary(data.frame(pred = predictions, obs = true_labels), lev = levels)
+  return(list(
+    Accuracy = metrics["Accuracy"],
+    F1 = metrics["Mean_F1"]
+  ))
+}
+
+# Function to apply sampling techniques
+sample_data <- function(data, method = "none") {
+  if (method == "up") {
+    # Oversampling using ROSE
+    data_balanced <- ROSE(smoker ~ ., data = data, seed = 123)$data
+  } else if (method == "down") {
+    # Undersampling using ROSE
+    data_balanced <- ovun.sample(smoker ~ ., data = data, method = "under", seed = 123)$data
+  } else {
+    # No sampling
+    data_balanced <- data
+  }
+  return(data_balanced)
+}
+
+# Define sampling methods
+set.seed(123)
+sampling_methods <- c("none", "up", "down")
+classification_method <- "randomForest"
+
+# Initialize results dataframe
+rf_results <- data.frame(
+  Model = character(),
+  Sampling_Method = character(),
+  Accuracy = double(),
+  F1 = double()
+)
+
+# For each sampling method
+for (sampling_method in sampling_methods) {
+  print(paste("Sampling method:", sampling_method))
+  flush.console()
+
+  # Apply sampling to training data
+  sampled_train <- sample_data(train_data, sampling_method)
+
+  # Train Random Forest model
+  model <- randomForest(smoker ~ ., data = sampled_train)
+
+  # Evaluate on test set
+  test_metrics <- evaluate_model(model, test_data, test_data$smoker)
+
+  # Add results
+  rf_results <- rbind(rf_results, data.frame(
+    Model = classification_method,
+    Sampling_Method = sampling_method,
+    Accuracy = test_metrics$Accuracy,
+    F1 = test_metrics$F1
+  ))
+  rownames(rf_results) <- NULL
+}
+
+# Display the results
+print(rf_results)
+
+```
+
+
+```{r}
+merged_results <- rbind(nb_results, lda_results, qda_results, rda_results, rf_results)
+
+# Add a column to differentiate models if needed
+merged_results$Model <- c(rep("Naive Bayes", nrow(nb_results)), rep("LDA", nrow(lda_results)), rep("QDA", nrow(qda_results)), rep("RDA", nrow(rda_results)), rep("RandomForest", nrow(rf_results)))
+
+sorted_results <- merged_results[order(-merged_results$Accuracy), ]
+
+# Print the sorted results
+print(sorted_results)
+```
 
 ```{r}
 # Calculate correlation between BMI category and charges
