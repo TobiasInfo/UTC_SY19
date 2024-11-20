@@ -445,29 +445,18 @@ colnames(encoded_region) <- c("northeast", "northwest", "southeast", "southwest"
 df <- cbind(df, encoded_region)
 
 # Drop the original "region" column
-df <- df %>% select(-region)
-
-# Standardize the "age", and "bmi" columns
-scaler <- preProcess(df[, c("age", "bmi")], method = c("center", "scale"))
-df_quant <- predict(scaler, df[, c("age", "bmi")])
-
-# Combine the scaled quantitative data with non-quantitative columns
-df_non_quant <- df %>% select(-c(age, bmi))
-scaled_data <- cbind(df_quant, df_non_quant)
-
-# Save the scaled data to a new CSV file
-write.csv(scaled_data, "data/medical_insurance_scaled.csv", row.names = FALSE)
-
+df_without_region <- df[, !colnames(df) %in% "region"]
+head(df_without_region)
 # Standardize the "age", "bmi", and "charges" columns
-scaler <- preProcess(df[, c("age", "bmi", "charges")], method = c("center", "scale"))
-df_scaled_quant <- predict(scaler, df[, c("age", "bmi", "charges")])
+scaler <- preProcess(df_without_region[, c("age", "bmi", "charges")], method = c("center", "scale"))
+df_scaled_quant <- predict(scaler, df_without_region[, c("age", "bmi", "charges")])
 
 # Combine the scaled quantitative data with non-quantitative columns
-df_non_quant <- df %>% select(-c(age, bmi, charges))
+df_non_quant <- df_without_region[, !colnames(df_without_region) %in% c("age", "bmi", "charges")]
 scaled_data <- cbind(df_scaled_quant, df_non_quant)
 
 # Save the scaled data to a new CSV file
-write.csv(scaled_data, "data/medical_insurance_scaled_class.csv", row.names = FALSE)
+write.csv(scaled_data, "data/medical_insurance_scaled.csv", row.names = FALSE)
 ```
 
 Comme nous l'avons vu, trois variables sont catégorielles : le sexe, le
@@ -561,7 +550,7 @@ La performance de chaque modèle est mesurée par trois métriques principales :
 
 ```{r}
 
-data <- read.csv("data/medical_insurance_scaled_class.csv", sep = ",")
+data <- read.csv("data/medical_insurance_scaled.csv", sep = ",")
 datasets <- create_datasets(data, "smoker")
 train_data_without_outliers <- datasets$train_data_without_outliers
 test_data_without_outliers <- datasets$test_data_without_outliers
@@ -1055,6 +1044,3 @@ print(best_without_outliers)
 ```
 
 Les résultats montrent que les modèles non linéaires tels que la machine à vecteurs de support (SVR) et les modèles à noyau (Kernel Regression) donnent de meilleures performances globales en termes de précision et de R2 lorsque les données contiennent des valeurs aberrantes. Dans le cas où les valeurs aberrantes ont été supprimées, les forêts aléatoires et les arbres de décision semblent être les plus performants. Cela suggère que certains modèles sont plus robustes face aux valeurs aberrantes que d'autres. De manière générale, cette comparaison met en évidence l'importance du choix du modèle et du traitement des données dans les tâches de régression.
-
-
-
